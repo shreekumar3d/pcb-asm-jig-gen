@@ -135,7 +135,7 @@ for comp in th_info:
 # fp.GetSide() - 0 for top, 31 for bottom
 # fp.GetOrientation() - 0, 90, ...
 
-def write_shell_shape(ref, x, y, rot, min_z, max_z, clearance, wall_thickness, fp, verts):
+def write_shell_shape(ref, x, y, rot, min_z, max_z, fp, verts):
     #
     # here we do some coordinate hackery
     # some fun things about KiCAD
@@ -184,15 +184,17 @@ def write_shell_shape(ref, x, y, rot, min_z, max_z, clearance, wall_thickness, f
     # on the other side of the bottom.
     fp.write('    linear_extrude(%f)\n'%(max_z))
     fp.write('      difference() {\n')
-    fp.write('        offset(r=%f)\n'%(clearance+wall_thickness))
+    fp.write('        offset(r=clearance+wall_thickness)\n')
     fp.write('          %s();\n'%(mod_name))
-    fp.write('        offset(r=%f)\n'%(clearance))
+    fp.write('        offset(clearance)\n')
     fp.write('          %s();\n'%(mod_name))
     fp.write('      }\n')
 
 output_fname = 'test.scad'
 print('Creating output in %s...\n')
 fp_scad = open(output_fname, 'w')
+fp_scad.write('clearance = 0.1;\n');
+fp_scad.write('wall_thickness = 1.2;\n');
 # This module will include all shells
 fp_scad.write('module holders() {\n')
 # For each TH component on the board
@@ -237,7 +239,6 @@ for th in th_info:
         write_shell_shape(th['ref'],
                       th['x'], th['y'], th['orientation'],
                       min_z, max_z,
-                      0.1, 1.2,
                       fp_scad, hull_verts)
 fp_scad.write('}\n')
 fp_scad.write('\n')
