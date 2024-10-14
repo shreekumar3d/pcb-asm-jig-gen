@@ -104,10 +104,18 @@ def load_mesh(filename):
     mesh_cache[filename] = retval
     return retval
 
+mounting_holes = []
 def get_th_info(board):
+    global mounting_holes
     fp_list = board.Footprints()
     th_info = []
     for fp in fp_list:
+        print(fp.GetReference())
+        print('  Position(mm):', units_to_mm(fp.GetX()), units_to_mm(fp.GetY()))
+        print('  On side     :', fp.GetSide())
+        print('  Orientation :', fp.GetOrientation().AsDegrees())
+        print('  DNP ?       :', fp.IsDNP())
+        print('  TH ?        :', fp.HasThroughHolePads())
         if fp.HasThroughHolePads():
             thc_models = []
             for mod3d in fp.Models():
@@ -127,12 +135,18 @@ def get_th_info(board):
                     'position' : fp.GetPosition(),
                     'models' : thc_models,
                     'kfp' : fp}) # Reference if we need more info later
-        #print(fp.GetReference())
-        #print('  Position(mm):', units_to_mm(fp.GetX()), units_to_mm(fp.GetY()))
-        #print('  On side     :', fp.GetSide())
-        #print('  Orientation :', fp.GetOrientation().AsDegrees())
-        #print('  DNP ?       :', fp.IsDNP())
-        #print('  TH ?        :', fp.HasThroughHolePads())
+            for fn in fp.Fields():
+                #print(fn)
+                #print(dir(fn))
+                #print(fn.GetName(), fn.GetText(), fn.GetShownText(True), fn.GetHyperlink(), fn.GetCanonicalName(), fn.GetFriendlyName(), fn.GetParentFootprint(), fn.GetParentAsString())
+                if fn.GetText().startswith('MountingHole'):
+                    print('  --> Is a Mounting Hole')
+                    mounting_holes.append(
+                        [units_to_mm(fp.GetX()), units_to_mm(fp.GetY())]
+                    )
+                    break
+        #print(fp.Footprint().GetName())
+        #pprint(dir(fp.Footprint()))
     return th_info
 
 parser = argparse.ArgumentParser()
@@ -242,6 +256,39 @@ fp_scad.write('clearance = 0.1;\n');
 fp_scad.write('wall_thickness = 1.2;\n');
 fp_scad.write('pcb_thickness=%s;\n'%(pcb_thickness))
 fp_scad.write('pcb_clearance=%s;\n'%(pcb_clearance))
+
+# Process the PCB edge
+pcb_edge_points = []
+shapes = [x for x in board.GetDrawings() if x.GetLayer()==pcbnew.Edge_Cuts]
+for d in shapes:
+    if d.GetShapeStr() == 'Circle':
+        print('Circle')
+        print('  Center = ', d.GetCenter())
+        print('  Radius = ', d.GetRadius())
+    elif d.GetShapeStr() == 'Arc':
+        print('Arc')
+        print('  Center = ', d.GetCenter())
+        print('  Radius = ', d.GetRadius())
+        print('  AngleStart = ', d.GetArcAngleStart().AsDegrees())
+        print('  Angle = ', d.GetArcAngle().AsDegrees())
+        print('  Mid = ', d.GetArcMid())
+    elif d.GetShapeStr() == 'Line':
+        pt = d.GetStart()
+        pcb_edge_points.append([units_to_mm(pt[0]), units_to_mm(pt[1])])
+        pt = d.GetEnd()
+        pcb_edge_points.append([units_to_mm(pt[0]), units_to_mm(pt[1])])
+    elif d.GetShapeStr() == 'Rect':
+        for corner in d.GetRectCorners():
+            pcb_edge_points.append([units_to_mm(corner[0]), units_to_mm(corner[1])])
+    elif d.GetShapeStr() == 'Polygon':
+        shape = d.GetPolyShape()
+        shapeText = shape.Format(False)
+        for s_pt in re.findall('VECTOR2I\\( [0-9]+, [0-9]+\\)',shapeText):
+            coord_parts = s_pt.split(' ')[1:]
+            x = units_to_mm(int(coord_parts[0][:-1]))
+            y = units_to_mm(int(coord_parts[1][:-1]))
+            pcb_edge_points.append([x,y])
+
 fp_centers = []
 used_refs = []
 topmost_z = 0
@@ -335,7 +382,7 @@ fp_scad.write('translate([0,0,%f+pcb_thickness]) {\n'%(topmost_z+base_height))
 fp_scad.write('  rotate([180,0,0]) {\n')
 fp_scad.write('    union() { \n')
 if len(fp_centers)>=4:
-    d_verts = np.array(fp_centers)
+    d_verts = np.array(fp_centers+pcb_edge_points)
     d_tris = scipy.spatial.Delaunay(d_verts)
     for tri in d_tris.simplices:
         # tri is a,b,c
@@ -362,3 +409,58 @@ fp_scad.write('      }\n')
 fp_scad.write('    }\n')
 fp_scad.write('  }\n')
 fp_scad.write('}\n')
+
+pcb_edge_points = np.array(pcb_edge_points)
+hull = scipy.spatial.ConvexHull(pcb_edge_points)
+pcb_edge_hull = pcb_edge_points[hull.vertices]
+fp_scad.write('module pcb_edge() {\n')
+fp_scad.write('  polygon(\n')
+fp_scad.write('    points=[\n')
+for v in pcb_edge_hull:
+    fp_scad.write('      [%f,%f],\n'%(v[0],-v[1])) # invert Y to match coordinate system
+fp_scad.write('    ]\n')
+fp_scad.write('  );\n')
+fp_scad.write('}\n')
+
+fp_scad.write('''
+pcb_gap=0.3;
+pcb_overlap=0.3;
+peri_thickness=1.6;
+topmost_z=%s;
+
+module outer_frame() {
+  translate([0,0,pcb_thickness]) {
+    linear_extrude(topmost_z+base_height) {
+      difference() {
+        offset(r=pcb_gap) pcb_edge();
+        offset(r=-pcb_overlap) pcb_edge();
+      }
+    }
+  }
+
+  linear_extrude(topmost_z+pcb_thickness+base_height) {
+    difference() {
+      offset(r=peri_thickness+pcb_gap) pcb_edge();
+      offset(r=pcb_gap) pcb_edge();
+    }
+  }
+}
+'''%(topmost_z))
+
+fp_scad.write('corner_support_size=15;\n')
+fp_scad.write('corner_support_height=60;\n') # FIXME: this is laziness! compute it!
+fp_scad.write('module pcb_corner_support() {\n')
+fp_scad.write('  translate([0,0,0])\n')
+fp_scad.write('  union() {\n')
+for pt in mounting_holes:
+    fp_scad.write('    translate([%s,%s,0])\n'%(pt[0],-pt[1])) # note - Y is negated
+    fp_scad.write('      cube([corner_support_size, corner_support_size,  corner_support_height],center = true);\n')
+fp_scad.write('  }\n')
+fp_scad.write('}\n')
+
+fp_scad.write('''
+intersection() {
+  pcb_corner_support();
+  outer_frame();
+};
+''')
