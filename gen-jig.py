@@ -445,6 +445,18 @@ module outer_frame() {
     }
   }
 }
+
+frame_height2 = 5; // from base
+module outer_frame_short() {
+  translate([0,0,topmost_z+pcb_thickness+base_height-frame_height2]) {
+    linear_extrude(frame_height2) {
+      difference() {
+        offset(r=peri_thickness+pcb_gap) pcb_edge();
+        offset(r=-pcb_overlap) pcb_edge();
+      }
+    }
+  }
+}
 '''%(topmost_z))
 
 fp_scad.write('corner_support_size=15;\n')
@@ -459,8 +471,11 @@ fp_scad.write('  }\n')
 fp_scad.write('}\n')
 
 fp_scad.write('''
-intersection() {
-  pcb_corner_support();
-  outer_frame();
-};
+union() {
+  intersection() {
+    pcb_corner_support();
+    outer_frame();
+  };
+  outer_frame_short();
+}
 ''')
