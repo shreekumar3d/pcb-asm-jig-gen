@@ -18,6 +18,7 @@
 import tinyobjloader
 import pcbnew
 import scipy.spatial
+from scipy.spatial.transform import Rotation
 
 # Standard imports
 import tempfile
@@ -29,6 +30,26 @@ from pprint import pprint
 import numpy as np
 
 mesh_cache = {}
+
+pcb_thickness = 1.6 # FIXME: get this from KiCAD
+# shells are generated to hold components. These don't
+# stretch all the way till the board. They fall short
+# by this 'clearance' value.  This serves two purposes:
+#   1. You can see from the sides that the components
+#      are sitting flush with the PCB before you solder
+#      them
+#   2. You may have SMD components on the boards placed
+#      very close to the through-hole stuff. This is an
+#      indirect strategy to avoid them.
+#      FIXME: implement a direct solution to ensure this
+#      never happens. On AtiVEGA, the USB power connector
+#      also intersects the shells. So this is not just an
+#      SMD thing. Potential idea - perhaps add all the
+#      "perimeter solids" first, then subtract the
+#      "outline solids", then subtract an extended
+#      bounding box of each other individual component not
+#      considered for the shells.
+pcb_clearance = 1 # a 1206 SMD resistor is 0.55mm. Tune further if required
 
 def units_to_mm(x):
     return x/1000000
@@ -135,7 +156,17 @@ for comp in th_info:
 # fp.GetSide() - 0 for top, 31 for bottom
 # fp.GetOrientation() - 0, 90, ...
 
-def write_shell_shape(ref, x, y, rot, min_z, max_z, fp, verts):
+def ref2outline(ref):
+    return 'ref_%s'%(ref)
+def ref2shell(ref):
+    return 'shell_%s'%(ref)
+def ref2peri(ref):
+    return 'peri_%s'%(ref)
+
+mod_lines = []
+geom_lines = []
+def gen_shell_shape(ref, x, y, rot, min_z, max_z, verts):
+    global mod_lines, geom_lines
     #
     # here we do some coordinate hackery
     # some fun things about KiCAD
@@ -162,41 +193,58 @@ def write_shell_shape(ref, x, y, rot, min_z, max_z, fp, verts):
 
 
     # first define the polygon so that we can do offset on it
-    mod_name = 'ref_%s'%(ref)
-    fp.write('module %s() {\n'%(mod_name))
-    fp.write('  polygon(\n')
-    fp.write('    points=[\n')
+    mod_name = ref2outline(ref)
+    mod_lines.append('// Outline for %s\n'%(ref))
+    mod_lines.append('module %s() {\n'%(mod_name))
+    mod_lines.append('  polygon(\n')
+    mod_lines.append('    points=[\n')
 
     for v in verts:
-        fp.write('      [%f,%f],\n'%(v[0],-v[1])) # invert Y to match coordinate system
-    fp.write('    ]\n')
-    fp.write('  );\n')
-    fp.write('}\n')
+        mod_lines.append('      [%f,%f],\n'%(v[0],-v[1])) # invert Y to match coordinate system
+    mod_lines.append('    ]\n')
+    mod_lines.append('  );\n')
+    mod_lines.append('}\n')
     #
     # note: max_z is positive - so this lifts
-    fp.write('translate([%f,%f,%f])\n'%(x,y, -max_z))
     if rot==90 or rot==-90: # Invert 90 and -90
         rot=-rot
-    fp.write('  rotate([0,0,%f])\n'%(rot))
+    shell_name = ref2shell(ref)
+    geom_lines.append('// Shell for %s\n'%(ref))
+    geom_lines.append('module %s() {\n'%(shell_name))
+    geom_lines.append('  translate([%f,%f,%f])\n'%(x,y, -max_z))
+    geom_lines.append('    rotate([0,0,%f])\n'%(rot))
     # note linear extrude is only "max_z". Assumes top
     # side of the board. "min_z" is the extent from the top
     # side of the board all the way to the end of the pin
     # on the other side of the bottom.
-    fp.write('    linear_extrude(%f)\n'%(max_z))
-    fp.write('      difference() {\n')
-    fp.write('        offset(r=clearance+wall_thickness)\n')
-    fp.write('          %s();\n'%(mod_name))
-    fp.write('        offset(clearance)\n')
-    fp.write('          %s();\n'%(mod_name))
-    fp.write('      }\n')
+    geom_lines.append('      linear_extrude(%f-pcb_clearance)\n'%(max_z))
+    geom_lines.append('        difference() {\n')
+    geom_lines.append('          offset(r=clearance+wall_thickness)\n')
+    geom_lines.append('            %s();\n'%(mod_name))
+    geom_lines.append('          offset(clearance)\n')
+    geom_lines.append('          %s();\n'%(mod_name))
+    geom_lines.append('        }\n')
+    geom_lines.append('}\n')
+
+    peri_name = ref2peri(ref)
+    mod_lines.append('// Perimeter for %s\n'%(ref))
+    mod_lines.append('module %s() {\n'%(peri_name))
+    mod_lines.append('  translate([%f,%f,%f])\n'%(x,y, -max_z))
+    mod_lines.append('    rotate([0,0,%f])\n'%(rot))
+    mod_lines.append('      offset(r=clearance+wall_thickness)\n')
+    mod_lines.append('        %s();\n'%(mod_name))
+    mod_lines.append('}\n')
 
 output_fname = 'test.scad'
 print('Creating output in %s...\n')
 fp_scad = open(output_fname, 'w')
 fp_scad.write('clearance = 0.1;\n');
 fp_scad.write('wall_thickness = 1.2;\n');
-# This module will include all shells
-fp_scad.write('module holders() {\n')
+fp_scad.write('pcb_thickness=%s;\n'%(pcb_thickness))
+fp_scad.write('pcb_clearance=%s;\n'%(pcb_clearance))
+fp_centers = []
+used_refs = []
+topmost_z = 0
 # For each TH component on the board
 for th in th_info:
     print('Processing ', th['ref'])
@@ -228,6 +276,21 @@ for th in th_info:
         #combined_xy[:,0] += th['x']
         #combined_xy[:,1] += th['y']
     if result_verts>0:
+        used_refs.append(th) # record for later processing
+        # compute center for holding mesh
+        min_x = min(combined_xy[:,0])
+        max_x = max(combined_xy[:,0])
+        min_y = min(combined_xy[:,1])
+        max_y = max(combined_xy[:,1])
+        center_x = ((min_x + max_x)/2)
+        center_y = -((min_y + max_y)/2)
+        pt = np.array([[center_x,center_y,0]])
+        rot_angle=th['orientation'];
+        if rot_angle in [90,-90]:
+            rot_angle =- rot_angle
+        rz = Rotation.from_euler('z', rot_angle, degrees=True)
+        rot_pt = rz.apply(pt[0])
+        fp_centers.append([rot_pt[0]+th['x'],rot_pt[1]+th['y']])
         #for v in combined_xy:
         #    print(v)
         # FIXME: how is ==0 possible?
@@ -235,16 +298,67 @@ for th in th_info:
         hull_verts = combined_xy[hull.vertices]
         print('Hull size = ', len(hull.vertices), ' min Z=', min_z, ' max Z=', max_z)
         print(hull_verts)
-        fp_scad.write('//%s\n'%(th['ref']))
-        write_shell_shape(th['ref'],
+        gen_shell_shape(th['ref'],
                       th['x'], th['y'], th['orientation'],
-                      min_z, max_z,
-                      fp_scad, hull_verts)
+                      min_z, max_z, hull_verts)
+        topmost_z = max(topmost_z, max_z)
+
+fp_scad.write(''.join(mod_lines))
+fp_scad.write(''.join(geom_lines))
+# This module will include all shells
+fp_scad.write('module holders() {\n')
+fp_scad.write('  union() { \n')
+for th in used_refs:
+    fp_scad.write('    %s();\n'%(ref2shell(th['ref'])))
+fp_scad.write('  }\n')
 fp_scad.write('}\n')
 fp_scad.write('\n')
+
 fp_scad.write('// convert to regular 3D coordinate system\n')
 fp_scad.write('// this is more friendly with step files\n')
 fp_scad.write('// but ensure your export from KiCAD with origin as grid origin\n')
 fp_scad.write('// without this, there will be an offset\n')
+fp_scad.write('translate([0,0,pcb_thickness])\n')
 fp_scad.write('rotate([180,0,0])\n')
-fp_scad.write('  holders();')
+fp_scad.write('  holders();\n')
+
+base_height = 1
+fp_scad.write('''base_height = %s;
+module wide_line(start, end) {
+    hull() {
+        translate(start) cylinder(base_height);
+        translate(end) cylinder(base_height);
+    }
+}\n\n'''%(base_height))
+
+fp_scad.write('translate([0,0,%f+pcb_thickness]) {\n'%(topmost_z+base_height))
+fp_scad.write('  rotate([180,0,0]) {\n')
+fp_scad.write('    union() { \n')
+if len(fp_centers)>=4:
+    d_verts = np.array(fp_centers)
+    d_tris = scipy.spatial.Delaunay(d_verts)
+    for tri in d_tris.simplices:
+        # tri is a,b,c
+        av = d_verts[tri[0]]
+        a = '[%s,%s]'%(av[0],av[1])
+        bv = d_verts[tri[1]]
+        b = '[%s,%s]'%(bv[0],bv[1])
+        cv = d_verts[tri[2]]
+        c = '[%s,%s]'%(cv[0],cv[1])
+        fp_scad.write('      wide_line(%s,%s);\n'%(a,b))
+        fp_scad.write('      wide_line(%s,%s);\n'%(b,c))
+        fp_scad.write('  wide_line(%s,%s);\n'%(c,a))
+else:
+    pprint(fp_centers)
+    for vert in fp_centers:
+        pt = '[%s,%s]'%(vert[0],vert[1])
+        fp_scad.write('      translate(%s) sphere(base_height);\n'%(pt))
+
+fp_scad.write('     union() { \n')
+for th in used_refs:
+    fp_scad.write('      linear_extrude(base_height)')
+    fp_scad.write('        %s();\n'% (ref2peri(th['ref'])))
+fp_scad.write('      }\n')
+fp_scad.write('    }\n')
+fp_scad.write('  }\n')
+fp_scad.write('}\n')
