@@ -51,6 +51,13 @@ pcb_thickness = 1.6 # FIXME: get this from KiCAD
 #      considered for the shells.
 pcb_clearance = 1 # a 1206 SMD resistor is 0.55mm. Tune further if required
 
+# AtiVEGA has no mounting hole on one corner.
+# Support enforcers ensure that a board outline is
+# included close to these places
+forced_pcb_supports = [
+  [ 121.1, 152.0] # non-existent mounting hole location near to Pico
+]
+
 def units_to_mm(x):
     return x/1000000
 
@@ -104,7 +111,7 @@ def load_mesh(filename):
     mesh_cache[filename] = retval
     return retval
 
-mounting_holes = []
+mounting_holes = forced_pcb_supports
 def get_th_info(board):
     global mounting_holes
     fp_list = board.Footprints()
