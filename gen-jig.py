@@ -259,6 +259,14 @@ def gen_shell_shape(ref, x, y, rot, min_z, max_z, verts):
 output_fname = 'test.scad'
 print('Creating output in %s...\n')
 fp_scad = open(output_fname, 'w')
+# We use OpenSCAD to do the grunt work of building the
+# actual model for us. Tesellation level must be set
+# to match or exceed the limits of 3D printing.
+# 3D printing generally works on the order of 0.1mm
+# so we choose a value half of that, 0.05 mm
+# This should give a decent balance of smooth shapes
+# and file sizes, and processing needs.
+fp_scad.write('$fs = 0.05;\n')
 fp_scad.write('clearance = 0.1;\n');
 fp_scad.write('wall_thickness = 1.2;\n');
 fp_scad.write('pcb_thickness=%s;\n'%(pcb_thickness))
