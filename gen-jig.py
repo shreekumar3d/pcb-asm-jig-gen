@@ -53,6 +53,8 @@ pcb_clearance = 1 # a 1206 SMD resistor is 0.55mm. Tune further if required
 
 protrude = 1 # shells will come above PCB by this much, so user can enable and see
 
+frame_height2 = 2 # PCB edges are this tall (apart from where they touch the PCB)
+
 # AtiVEGA has no mounting hole on one corner.
 # Support enforcers ensure that a board outline is
 # included close to these places
@@ -61,7 +63,7 @@ forced_pcb_supports = [
 ]
 
 # Selectively process these component references
-ref_filter_list = ['J2', 'JP3']
+ref_filter_list = []
 
 def units_to_mm(x):
     return x/1000000
@@ -557,7 +559,7 @@ module outer_frame() {
   }
 }
 
-frame_height2 = 5; // from base
+frame_height2 = %s; // from base
 module outer_frame_short() {
   translate([0,0,topmost_z+pcb_thickness+base_height-frame_height2]) {
     linear_extrude(frame_height2) {
@@ -568,7 +570,7 @@ module outer_frame_short() {
     }
   }
 }
-''')
+'''%(frame_height2))
 
 fp_scad.write('corner_support_size=15;\n')
 fp_scad.write('corner_support_height=60;\n') # FIXME: this is laziness! compute it!
