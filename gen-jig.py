@@ -453,9 +453,10 @@ pcb_perimeter_height = %s; // from base
 '''%(topmost_z, pcb_perimeter_height))
 
 fp_scad.write('module base_structure() {\n')
-fp_scad.write('  intersection() {\n')
-fp_scad.write('    translate([0,0,pcb_thickness+topmost_z]) {\n')
-fp_scad.write('      union() { \n')
+fp_scad.write('  translate([0,0,pcb_thickness+topmost_z]) {\n')
+fp_scad.write('    union() {\n')
+fp_scad.write('      intersection() { \n')
+fp_scad.write('        union(){ \n')
 if len(dt_centers)>=4:
     d_verts = np.array(dt_centers)
     d_tris = scipy.spatial.Delaunay(d_verts)
@@ -467,38 +468,40 @@ if len(dt_centers)>=4:
         b = '[%s,%s]'%(bv[0],bv[1])
         cv = d_verts[tri[2]]
         c = '[%s,%s]'%(cv[0],cv[1])
-        fp_scad.write('        wide_line(%s,%s);\n'%(a,b))
-        fp_scad.write('        wide_line(%s,%s);\n'%(b,c))
-        fp_scad.write('        wide_line(%s,%s);\n'%(c,a))
+        fp_scad.write('          wide_line(%s,%s);\n'%(a,b))
+        fp_scad.write('          wide_line(%s,%s);\n'%(b,c))
+        fp_scad.write('          wide_line(%s,%s);\n'%(c,a))
 else:
     pprint(dt_centers)
     for vert in dt_centers:
         pt = '[%s,%s]'%(vert[0],vert[1])
         fp_scad.write('        translate(%s) sphere(base_thickness);\n'%(pt))
+fp_scad.write('        }\n')
+fp_scad.write('''
+        // ensure no peri lines go out of frame
+        // tall shell supports must be included though
+        linear_extrude(base_thickness)
+          offset(r=pcb_perimeter+pcb_gap)
+            pcb_edge();
+      }
+''')
 
-fp_scad.write('       union() { \n')
+fp_scad.write('      union() { \n')
 for shell_ident in all_shells:
     # if this component is less taller than the tallest component
     # then the extra must be filled up
     extra_extrude = topmost_z - shell_ident['max_z']
     if extra_extrude>0:
         fp_scad.write('        translate([0,0,-%f])\n'%(extra_extrude))
-        fp_scad.write('        linear_extrude(base_thickness+%f)\n'%(extra_extrude))
+        fp_scad.write('          linear_extrude(base_thickness+%f)\n'%(extra_extrude))
+        fp_scad.write('            %s();\n'% (ref2peri(shell_ident['name'])))
     else:
         fp_scad.write('        linear_extrude(base_thickness)\n')
-    fp_scad.write('          %s();\n'% (ref2peri(shell_ident['name'])))
-fp_scad.write('        }\n')
+        fp_scad.write('          %s();\n'% (ref2peri(shell_ident['name'])))
 fp_scad.write('      }\n')
 fp_scad.write('    }\n')
-
-fp_scad.write('''
-    // ensure no peri lines go out of frame
-    // tall shell supports must be included though
-    linear_extrude(pcb_thickness+topmost_z+base_thickness)
-      offset(r=pcb_perimeter+pcb_gap) pcb_edge();
-  }
-}
-''');
+fp_scad.write('  }\n')
+fp_scad.write('}\n')
 
 fp_scad.write('''
 module pcb_holder() {
@@ -527,7 +530,7 @@ module pcb_holder() {
 
 module pcb_perimeter_short() {
   translate([0,0,pcb_thickness+topmost_z-pcb_perimeter_height]) {
-    linear_extrude(pcb_perimeter_height) {
+    linear_extrude(pcb_perimeter_height+base_thickness) {
       difference() {
         offset(r=pcb_perimeter+pcb_gap) pcb_edge();
         offset(r=-pcb_overlap) pcb_edge();
