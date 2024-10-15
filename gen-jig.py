@@ -61,7 +61,7 @@ forced_pcb_supports = [
 ]
 
 # Selectively process these component references
-ref_filter_list = []
+ref_filter_list = ['J2', 'JP3']
 
 def units_to_mm(x):
     return x/1000000
@@ -400,7 +400,10 @@ for th in th_info:
             gen_shell_shape(shell_ident,
                           th['x'], th['y'], th['orientation'],
                           min_z, max_z, hull_verts)
-            all_shells.append(shell_ident)
+            all_shells.append({
+                'name':shell_ident,
+                'min_z':min_z,
+                'max_z':max_z})
             print('  Generating shell %s for mesh %s'%(shell_ident, modinfo['model']))
             topmost_z = max(topmost_z, max_z)
 
@@ -410,14 +413,14 @@ fp_scad.write(''.join(geom_lines))
 fp_scad.write('module holders() {\n')
 fp_scad.write('  union() { \n')
 for shell_ident in all_shells:
-    fp_scad.write('    %s();\n'%(ref2shell(shell_ident)))
+    fp_scad.write('    %s();\n'%(ref2shell(shell_ident['name'])))
 fp_scad.write('  }\n')
 fp_scad.write('}\n')
 # This module will include all pockets
 fp_scad.write('module pockets() {\n')
 fp_scad.write('  union() { \n')
 for shell_ident in all_shells:
-    fp_scad.write('    %s();\n'%(ref2pocket(shell_ident)))
+    fp_scad.write('    %s();\n'%(ref2pocket(shell_ident['name'])))
 fp_scad.write('  }\n')
 fp_scad.write('}\n')
 fp_scad.write('\n')
@@ -513,17 +516,24 @@ else:
 
 fp_scad.write('         union() { \n')
 for shell_ident in all_shells:
-    fp_scad.write('          linear_extrude(base_height)')
-    fp_scad.write('            %s();\n'% (ref2peri(shell_ident)))
+    # if this component is less taller than the tallest component
+    # then the extra must be filled up
+    extra_extrude = topmost_z - shell_ident['max_z']
+    if extra_extrude>0:
+        fp_scad.write('          linear_extrude(base_height+%f)\n'%(extra_extrude))
+    else:
+        fp_scad.write('          linear_extrude(base_height)\n')
+    fp_scad.write('            %s();\n'% (ref2peri(shell_ident['name'])))
 fp_scad.write('          }\n')
 fp_scad.write('        }\n')
 fp_scad.write('      }\n')
 fp_scad.write('    }\n')
 
 fp_scad.write('''
-    translate([0,0,pcb_thickness+topmost_z]) // ensure no peri lines go out of frame
-      linear_extrude(base_height)
-        offset(r=peri_thickness+pcb_gap) pcb_edge();
+    // ensure no peri lines go out of frame
+    // tall shell supports must be included though
+    linear_extrude(base_height+pcb_thickness+topmost_z)
+      offset(r=peri_thickness+pcb_gap) pcb_edge();
   }
 }
 ''');
