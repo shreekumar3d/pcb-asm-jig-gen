@@ -385,11 +385,12 @@ module wide_line(start, end) {
     }
 }\n\n'''%(base_height))
 
+fp_centers = fp_centers+mounting_holes
 fp_scad.write('translate([0,0,%f+pcb_thickness]) {\n'%(topmost_z+base_height))
 fp_scad.write('  rotate([180,0,0]) {\n')
 fp_scad.write('    union() { \n')
 if len(fp_centers)>=4:
-    d_verts = np.array(fp_centers+pcb_edge_points)
+    d_verts = np.array(fp_centers)
     d_tris = scipy.spatial.Delaunay(d_verts)
     for tri in d_tris.simplices:
         # tri is a,b,c
