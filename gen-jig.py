@@ -296,6 +296,19 @@ for d in shapes:
             y = units_to_mm(int(coord_parts[1][:-1]))
             pcb_edge_points.append([x,y])
 
+# Write out the edge
+pcb_edge_points = np.array(pcb_edge_points)
+hull = scipy.spatial.ConvexHull(pcb_edge_points)
+pcb_edge_hull = pcb_edge_points[hull.vertices]
+fp_scad.write('module pcb_edge() {\n')
+fp_scad.write('  polygon(\n')
+fp_scad.write('    points=[\n')
+for v in pcb_edge_hull:
+    fp_scad.write('      [%f,%f],\n'%(v[0],-v[1])) # invert Y to match coordinate system
+fp_scad.write('    ]\n')
+fp_scad.write('  );\n')
+fp_scad.write('}\n')
+
 fp_centers = []
 used_refs = []
 topmost_z = 0
@@ -385,12 +398,48 @@ module wide_line(start, end) {
     }
 }\n\n'''%(base_height))
 
-fp_centers = fp_centers+mounting_holes
-fp_scad.write('translate([0,0,%f+pcb_thickness]) {\n'%(topmost_z+base_height))
-fp_scad.write('  rotate([180,0,0]) {\n')
-fp_scad.write('    union() { \n')
-if len(fp_centers)>=4:
-    d_verts = np.array(fp_centers)
+# Compute bounding box of PCB
+pcb_min_x = pcb_max_x = pcb_edge_points[0][0]
+pcb_min_y = pcb_max_y = pcb_edge_points[0][1]
+for pt in pcb_edge_points:
+    pcb_min_x = min(pcb_min_x, pt[0])
+    pcb_max_x = max(pcb_max_x, pt[0])
+    pcb_min_y = min(pcb_min_y, pt[1])
+    pcb_max_y = max(pcb_max_y, pt[1])
+# FIXME: the more "pythonic" version below gives me a strange float can't
+# be subscripted erro
+#pcb_min_x = functools.reduce(lambda a,b:min(a[0], b[0]), pcb_edge_points)
+#pcb_max_x = functools.reduce(lambda a,b:max(a[0], b[0]), pcb_edge_points)
+#pcb_min_y = functools.reduce(lambda a,b:min(a[1], b[1]), pcb_edge_points)
+#pcb_max_y = functools.reduce(lambda a,b:max(a[1], b[1]), pcb_edge_points)
+
+# Delaunay triangulation will be done on the following points
+# 1. centers of all TH footprints
+# 2. mounting holes
+# 3. bounding box corners of PCB edge. mounting holes are
+#    inside the PCB and don't extend all the way to the edge.
+#    If we don't include them, we may end up having a separate
+#    "delaunay island", depending on the exact PCB.
+dt_centers = fp_centers + mounting_holes + [
+    [pcb_min_x , pcb_min_y],
+    [pcb_min_x , pcb_max_y],
+    [pcb_max_x , pcb_min_y],
+    [pcb_max_x , pcb_max_y]
+]
+
+fp_scad.write('''
+pcb_gap=0.3;
+pcb_overlap=0.3;
+peri_thickness=1.6;
+topmost_z=%s;
+'''%(topmost_z))
+
+fp_scad.write('intersection() {\n')
+fp_scad.write('  translate([0,0,%f+pcb_thickness]) {\n'%(topmost_z+base_height))
+fp_scad.write('    rotate([180,0,0]) {\n')
+fp_scad.write('      union() { \n')
+if len(dt_centers)>=4:
+    d_verts = np.array(dt_centers)
     d_tris = scipy.spatial.Delaunay(d_verts)
     for tri in d_tris.simplices:
         # tri is a,b,c
@@ -400,42 +449,32 @@ if len(fp_centers)>=4:
         b = '[%s,%s]'%(bv[0],bv[1])
         cv = d_verts[tri[2]]
         c = '[%s,%s]'%(cv[0],cv[1])
-        fp_scad.write('      wide_line(%s,%s);\n'%(a,b))
-        fp_scad.write('      wide_line(%s,%s);\n'%(b,c))
-        fp_scad.write('  wide_line(%s,%s);\n'%(c,a))
+        fp_scad.write('        wide_line(%s,%s);\n'%(a,b))
+        fp_scad.write('        wide_line(%s,%s);\n'%(b,c))
+        fp_scad.write('        wide_line(%s,%s);\n'%(c,a))
 else:
-    pprint(fp_centers)
-    for vert in fp_centers:
+    pprint(dt_centers)
+    for vert in dt_centers:
         pt = '[%s,%s]'%(vert[0],vert[1])
-        fp_scad.write('      translate(%s) sphere(base_height);\n'%(pt))
+        fp_scad.write('        translate(%s) sphere(base_height);\n'%(pt))
 
-fp_scad.write('     union() { \n')
+fp_scad.write('       union() { \n')
 for th in used_refs:
-    fp_scad.write('      linear_extrude(base_height)')
-    fp_scad.write('        %s();\n'% (ref2peri(th['ref'])))
+    fp_scad.write('        linear_extrude(base_height)')
+    fp_scad.write('          %s();\n'% (ref2peri(th['ref'])))
+fp_scad.write('        }\n')
 fp_scad.write('      }\n')
 fp_scad.write('    }\n')
 fp_scad.write('  }\n')
-fp_scad.write('}\n')
-
-pcb_edge_points = np.array(pcb_edge_points)
-hull = scipy.spatial.ConvexHull(pcb_edge_points)
-pcb_edge_hull = pcb_edge_points[hull.vertices]
-fp_scad.write('module pcb_edge() {\n')
-fp_scad.write('  polygon(\n')
-fp_scad.write('    points=[\n')
-for v in pcb_edge_hull:
-    fp_scad.write('      [%f,%f],\n'%(v[0],-v[1])) # invert Y to match coordinate system
-fp_scad.write('    ]\n')
-fp_scad.write('  );\n')
-fp_scad.write('}\n')
 
 fp_scad.write('''
-pcb_gap=0.3;
-pcb_overlap=0.3;
-peri_thickness=1.6;
-topmost_z=%s;
+  translate([0,0,pcb_thickness+topmost_z]) // ensure no peri lines go out of frame
+    linear_extrude(base_height)
+      offset(r=peri_thickness+pcb_gap) pcb_edge();
+}
+''');
 
+fp_scad.write('''
 module outer_frame() {
   translate([0,0,pcb_thickness]) {
     linear_extrude(topmost_z+base_height) {
