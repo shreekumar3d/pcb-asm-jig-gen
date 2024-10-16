@@ -1,0 +1,11 @@
+Developer: Shree Kumar.
+
+Copyright (c) 2024. Licensed under the MIT license. See
+LICENSE for the entire text.
+
+This software includes the following module
+
+-  tripy from https://github.com/linuxlewis/tripy.
+   triply is Copyright (c) 2017 Sam Bolgert
+   tripy is licensed under the MIT license. See file header
+   in tripy.py for details.
