@@ -140,12 +140,12 @@ def get_th_info(board):
     for fp in fp_list:
         fp_x = units_to_mm(fp.GetX())
         fp_y = -units_to_mm(fp.GetY())
-        print(fp.GetReference())
-        print('  Position(mm):', fp_x, fp_y)
-        print('  On side     :', fp.GetSide())
-        print('  Orientation :', fp.GetOrientation().AsDegrees())
-        print('  DNP ?       :', fp.IsDNP())
-        print('  TH ?        :', fp.HasThroughHolePads())
+        #print(fp.GetReference())
+        #print('  Position(mm):', fp_x, fp_y)
+        #print('  On side     :', fp.GetSide())
+        #print('  Orientation :', fp.GetOrientation().AsDegrees())
+        #print('  DNP ?       :', fp.IsDNP())
+        #print('  TH ?        :', fp.HasThroughHolePads())
         if fp.HasThroughHolePads():
             thc_models = []
             for mod3d in fp.Models():
@@ -172,7 +172,7 @@ def get_th_info(board):
                 #print(dir(fn))
                 #print(fn.GetName(), fn.GetText(), fn.GetShownText(True), fn.GetHyperlink(), fn.GetCanonicalName(), fn.GetFriendlyName(), fn.GetParentFootprint(), fn.GetParentAsString())
                 if fn.GetText().startswith('MountingHole'):
-                    print('  --> Is a Mounting Hole')
+                    #print('  --> Is a Mounting Hole')
                     mounting_holes.append(
                         [fp_x, fp_y]
                     )
