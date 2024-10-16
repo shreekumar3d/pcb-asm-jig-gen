@@ -9,4 +9,6 @@ Starting with a PCB design, the project aims to achieve this workflow:
  3. Mount components and PCB on jig. If tolerance issues, tweak parameters, goto step 1.
  4. Solder away for perfect results... every time !
 
+![Jig Usage](images/jig-animation.gif)
+
 Do checkout [this project's hackaday page](https://hackaday.io/project/198409-pcb-assembly-jig-generator) for stories and updates.
