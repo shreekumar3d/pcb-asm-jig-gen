@@ -78,9 +78,7 @@ def units_to_mm(x):
     return x/1000000
 
 def kcpt2pt(pt):
-    # KiCAD coordinate system is like raster, Y increases down.
-    # need to reverse it for 3D
-    return [units_to_mm(pt[0]), -units_to_mm(pt[1])]
+    return [units_to_mm(pt[0]), units_to_mm(pt[1])]
 
 # returns flat array of xyz coordinates
 def load_obj_mesh_verts(filename, scale=1.0):
@@ -361,10 +359,15 @@ mounting_hole_support_size=%s;
 # So, a 3 mm radius, 90 degree arc will have
 # (2*3*3.14)/0.1 = 47 points - or one every 2 degrees.
 # Looks high. Tweak later as required
+#
+#
+# Coordinate system note: we'll do all the ops on the
+# edges in kicad coordinate system. The selected edge
+# shall be transformed to our system (negate Y)
 arc_resolution = 0.1
 
 def tess_iters(r, degrees):
-    return int(((2*math.pi*r)/arc_resolution)/(360/degrees))
+    return int(abs(((2*math.pi*r)/arc_resolution)/(360/degrees)))
 
 def tesellate_circle(seg):
     circle_angle = 4*math.pi # 2pi radians = 180 degree
@@ -394,8 +397,6 @@ def tesellate_arc(seg):
         y = cy + r * math.sin(angle)
         verts.append([x,y])
     verts.append(seg['end'])
-    #print('Arc points: start=', seg['start'], ' end=',seg['end'])
-    #pprint(verts)
     return verts
 
 pcb_segments = []
@@ -689,12 +690,13 @@ fp_scad.write('\n')
 
 # Write out the PCB edge
 pcb_edge_points = np.array(pcb_edge_points)
-hull = scipy.spatial.ConvexHull(pcb_edge_points)
-pcb_edge_hull = pcb_edge_points[hull.vertices]
+pcb_edge_points[:,1] *= -1.0 # Negate all Ys to fix coordinate system
+#hull = scipy.spatial.ConvexHull(pcb_edge_points)
+#pcb_edge_hull = pcb_edge_points[hull.vertices]
 fp_scad.write('module pcb_edge() {\n')
 fp_scad.write('  polygon(\n')
 fp_scad.write('    points=[\n')
-for v in pcb_edge_hull:
+for v in pcb_edge_points:
     fp_scad.write('      [%f,%f],\n'%(v[0],v[1]))
 fp_scad.write('    ]\n')
 fp_scad.write('  );\n')
