@@ -691,8 +691,8 @@ fp_scad.write('\n')
 # Write out the PCB edge
 pcb_edge_points = np.array(pcb_edge_points)
 pcb_edge_points[:,1] *= -1.0 # Negate all Ys to fix coordinate system
-#hull = scipy.spatial.ConvexHull(pcb_edge_points)
-#pcb_edge_hull = pcb_edge_points[hull.vertices]
+hull = scipy.spatial.ConvexHull(pcb_edge_points)
+pcb_edge_hull = pcb_edge_points[hull.vertices]
 fp_scad.write('module pcb_edge() {\n')
 fp_scad.write('  polygon(\n')
 fp_scad.write('    points=[\n')
@@ -743,6 +743,13 @@ for pt in pcb_edge_points:
     pcb_min_y = min(pcb_min_y, pt[1])
     pcb_max_y = max(pcb_max_y, pt[1])
 
+pcb_bb_corners = [
+    [pcb_min_x , pcb_min_y],
+    [pcb_min_x , pcb_max_y],
+    [pcb_max_x , pcb_min_y],
+    [pcb_max_x , pcb_max_y]
+]
+
 # Delaunay triangulation will be done on the following points
 # 1. centers of all TH footprints
 # 2. mounting holes
@@ -750,12 +757,7 @@ for pt in pcb_edge_points:
 #    inside the PCB and don't extend all the way to the edge.
 #    If we don't include them, we may end up having a separate
 #    "delaunay island", depending on the exact PCB.
-dt_centers = fp_centers + mounting_holes + [
-    [pcb_min_x , pcb_min_y],
-    [pcb_min_x , pcb_max_y],
-    [pcb_max_x , pcb_min_y],
-    [pcb_max_x , pcb_max_y]
-]
+dt_centers = fp_centers + mounting_holes + pcb_bb_corners
 
 fp_scad.write('module base_structure() {\n')
 fp_scad.write('  translate([0,0,pcb_thickness+topmost_z]) {\n')
@@ -849,7 +851,8 @@ fp_scad.write('corner_support_height=60;\n') # FIXME: this is laziness! compute 
 fp_scad.write('module pcb_corner_support() {\n')
 fp_scad.write('  translate([0,0,0])\n')
 fp_scad.write('  union() {\n')
-for pt in mounting_holes:
+# FIXME: Policy: include PCB bounding box corners in support enforcers
+for pt in mounting_holes+pcb_bb_corners:
     fp_scad.write('    translate([%s,%s,0])\n'%(pt[0],pt[1]))
     fp_scad.write('      cube([mounting_hole_support_size, mounting_hole_support_size,  corner_support_height],center = true);\n')
 fp_scad.write('  }\n')
