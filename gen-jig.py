@@ -56,6 +56,8 @@ pcb_thickness = 1.6 # FIXME: get this from KiCAD
 #      considered for the shells.
 shell_clearance = 1 # a 1206 SMD resistor is 0.55mm. Tune further if required
 
+base_is_solid = 0
+
 base_thickness = 1
 
 shell_protrude = 1 # shells will come above PCB by this much, so user can enable and see
@@ -279,7 +281,9 @@ fp_scad = open(output_fname, 'w')
 # and file sizes, and processing needs.
 fp_scad.write('''
 // { These are configurable parameters
-// you can tweak these
+// you can tweak these here and count on
+// openscad magic to do show you the result
+// right away!
 
 // Tesellate finer than 3D printer can print
 $fs = 0.05;
@@ -308,12 +312,22 @@ shell_protrude=%s;
 // sits)
 base_thickness = %s;
 
+// By default, we generate a base with a delaunay
+// frame holding the shells together.
+//
+// Sometimes you just need a solid base - e.g. to
+// put some text - like PCB info, version
+// and even stuff like qrcodes! For these you
+// mostly need a solid base. Set this is non-zero
+// if that's what you need.
+base_is_solid = %s;
+
 // Board will sit on a lip, close to mounting holes
 // Lips that lie in a square of this size (in mm)
 // will be part of the model.
 mounting_hole_support_size=%s;
 '''%(pcb_thickness, shell_clearance,shell_protrude, base_thickness,
-     mounting_hole_support_size))
+     base_is_solid, mounting_hole_support_size))
 # Process the PCB edge
 #
 # KiCAD has an Edge Cuts layer. Drawings on this layer define
@@ -759,11 +773,20 @@ pcb_bb_corners = [
 #    "delaunay island", depending on the exact PCB.
 dt_centers = fp_centers + mounting_holes + pcb_bb_corners
 
-fp_scad.write('module base_structure() {\n')
+fp_scad.write('''
+module base_solid() {
+  translate([0,0,pcb_thickness+topmost_z]) {
+    linear_extrude(base_thickness) {
+      offset(r=pcb_holder_perimeter+pcb_gap) pcb_edge();
+    }
+  }
+};
+''')
+
+fp_scad.write('module base_delaunay() {\n')
 fp_scad.write('  translate([0,0,pcb_thickness+topmost_z]) {\n')
-fp_scad.write('    union() {\n')
-fp_scad.write('      intersection() { \n')
-fp_scad.write('        union(){ \n')
+fp_scad.write('  intersection() { \n')
+fp_scad.write('    union(){ \n')
 if len(dt_centers)>=4:
     d_verts = np.array(dt_centers)
     d_tris = scipy.spatial.Delaunay(d_verts)
@@ -775,37 +798,38 @@ if len(dt_centers)>=4:
         b = '[%s,%s]'%(bv[0],bv[1])
         cv = d_verts[tri[2]]
         c = '[%s,%s]'%(cv[0],cv[1])
-        fp_scad.write('          wide_line(%s,%s);\n'%(a,b))
-        fp_scad.write('          wide_line(%s,%s);\n'%(b,c))
-        fp_scad.write('          wide_line(%s,%s);\n'%(c,a))
+        fp_scad.write('      wide_line(%s,%s);\n'%(a,b))
+        fp_scad.write('      wide_line(%s,%s);\n'%(b,c))
+        fp_scad.write('      wide_line(%s,%s);\n'%(c,a))
 else:
-    pprint(dt_centers)
-    for vert in dt_centers:
-        pt = '[%s,%s]'%(vert[0],vert[1])
-        fp_scad.write('        translate(%s) sphere(base_thickness);\n'%(pt))
-fp_scad.write('        }\n')
-fp_scad.write('''
-        // ensure no peri lines go out of frame
-        // tall shell supports must be included though
-        linear_extrude(base_thickness)
-          offset(r=pcb_holder_perimeter+pcb_gap)
-            pcb_edge();
-      }
-''')
+    print("WARNING: no centers for delaunay!")
 
-fp_scad.write('      union() { \n')
+fp_scad.write('    }\n')
+fp_scad.write('''
+    // ensure no peri lines go out of frame
+    // tall shell supports must be included though
+    linear_extrude(base_thickness)
+      offset(r=pcb_holder_perimeter+pcb_gap)
+        pcb_edge();
+    }
+}
+''')
+fp_scad.write('}\n')
+
+fp_scad.write('module component_shell_support() {\n')
+fp_scad.write('  translate([0,0,pcb_thickness+topmost_z]) {\n')
+fp_scad.write('    union() {\n')
 for shell_info in all_shells:
     # if this component is less taller than the tallest component
     # then the extra must be filled up
     extra_extrude = topmost_z - shell_info['max_z']
     if extra_extrude>0:
-        fp_scad.write('        translate([0,0,max_z_%s-topmost_z])\n'%(shell_info['name']))
-        fp_scad.write('          linear_extrude(base_thickness+topmost_z-max_z_%s)\n'%(shell_info['name']))
-        fp_scad.write('            %s();\n'% (ref2peri(shell_info['name'])))
-    else:
-        fp_scad.write('        linear_extrude(base_thickness)\n')
+        fp_scad.write('      translate([0,0,max_z_%s-topmost_z])\n'%(shell_info['name']))
+        fp_scad.write('        linear_extrude(base_thickness+topmost_z-max_z_%s)\n'%(shell_info['name']))
         fp_scad.write('          %s();\n'% (ref2peri(shell_info['name'])))
-fp_scad.write('      }\n')
+    else:
+        fp_scad.write('      linear_extrude(base_thickness)\n')
+        fp_scad.write('        %s();\n'% (ref2peri(shell_info['name'])))
 fp_scad.write('    }\n')
 fp_scad.write('  }\n')
 fp_scad.write('}\n')
@@ -869,7 +893,12 @@ module complete_model() {
         pcb_holder();
       };
       pcb_perimeter_short();
-      base_structure();
+      if(base_is_solid==0) {
+        base_delaunay();
+        } else {
+        base_solid();
+      }
+      component_shell_support();
       mounted_component_shells();
     }
     mounted_component_pockets();
