@@ -21,12 +21,16 @@ for d in shapes:
         print('  AngleStart = ', d.GetArcAngleStart().AsDegrees())
         print('  Angle = ', d.GetArcAngle().AsDegrees())
         print('  Mid = ', d.GetArcMid())
+        print('  Start Pt = ', d.GetStart())
+        print('  End Pt = ', d.GetEnd())
     elif d.GetShapeStr() == 'Line':
         print('Line')
         print('  Start = ', d.GetStart())
         print('  End = ', d.GetEnd())
     elif d.GetShapeStr() == 'Rect':
         print('Rectangle')
+        print('  Width = ', d.GetWidth())
+        print('  Length = ', d.GetLength()) # not implemented!!
         print('  Corners = ', d.GetRectCorners())
     elif d.GetShapeStr() == 'Polygon':
         print('Polygon')
