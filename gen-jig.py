@@ -72,6 +72,8 @@ forced_pcb_supports = [
 # Selectively process these component references
 ref_filter_list = [] # ['U1', 'J2']
 
+mounting_hole_support_size = 15
+
 def units_to_mm(x):
     return x/1000000
 
@@ -268,7 +270,7 @@ def gen_shell_shape(ref, x, y, rot, min_z, max_z, verts):
     mod_lines.append('}\n')
 
 output_fname = 'test.scad'
-print('Creating output in %s...\n')
+print('Creating output in %s...\n'%(output_fname))
 fp_scad = open(output_fname, 'w')
 # We use OpenSCAD to do the grunt work of building the
 # actual model for us. Tesellation level must be set
@@ -307,7 +309,13 @@ shell_protrude=%s;
 // and connects it to the frame (on which the board
 // sits)
 base_thickness = %s;
-'''%(pcb_thickness, shell_clearance,shell_protrude, base_thickness))
+
+// Board will sit on a lip, close to mounting holes
+// Lips that lie in a square of this size (in mm)
+// will be part of the model.
+mounting_hole_support_size=%s;
+'''%(pcb_thickness, shell_clearance,shell_protrude, base_thickness,
+     mounting_hole_support_size))
 # Process the PCB edge
 #
 # KiCAD has an Edge Cuts layer. Drawings on this layer define
@@ -562,7 +570,7 @@ for fs in pcb_filled_shapes:
     #pprint(fs)
     if fs['type'] == 'Circle':
         fs['area'] = math.pi * math.pow(fs['radius'],2)
-        fs['vertices'] = tesellate_circle(segment)
+        fs['vertices'] = tesellate_circle(fs)
     else:
         # It's a polygon or rectangle
         tris = tripy.earclip(fs['vertices'])
@@ -835,14 +843,13 @@ module pcb_perimeter_short() {
 }
 ''')
 
-fp_scad.write('corner_support_size=15;\n')
 fp_scad.write('corner_support_height=60;\n') # FIXME: this is laziness! compute it!
 fp_scad.write('module pcb_corner_support() {\n')
 fp_scad.write('  translate([0,0,0])\n')
 fp_scad.write('  union() {\n')
 for pt in mounting_holes:
     fp_scad.write('    translate([%s,%s,0])\n'%(pt[0],pt[1]))
-    fp_scad.write('      cube([corner_support_size, corner_support_size,  corner_support_height],center = true);\n')
+    fp_scad.write('      cube([mounting_hole_support_size, mounting_hole_support_size,  corner_support_height],center = true);\n')
 fp_scad.write('  }\n')
 fp_scad.write('}\n')
 
