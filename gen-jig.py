@@ -29,6 +29,8 @@ import numpy as np
 import sys
 import tomllib
 import json
+import subprocess
+import tempfile
 
 # Local imports
 from jigcommon import *
@@ -191,7 +193,16 @@ def gen_shell_shape(ref, x, y, rot, min_z, max_z, verts, mod_lines, geom_lines):
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--config", help='Use specified configuration options file')
+parser.add_argument("--keep-orientation", action='store_true',
+                    default=False,
+                    help='''Match orientation of the output to KiCAD 3D view.
+The default orients the output for direct printing (i.e. rotated by 180 degrees
+in along the X axis.''')
+parser.add_argument("--output-format", default='stl',
+                    choices=['stl','oscad'],
+                    help='Output file format')
 parser.add_argument("kicad_pcb", help='KiCAD PCB file (.kicad_pcb) to process')
+parser.add_argument("output", help='Output file to generate.')
 args = parser.parse_args()
 
 if args.config:
@@ -262,9 +273,14 @@ for comp in th_info:
 mod_lines = []
 geom_lines = []
 
-output_fname = 'test.scad'
-print('Creating output in %s...\n'%(output_fname))
-fp_scad = open(output_fname, 'w')
+if args.output_format == 'stl':
+    fp_scad = tempfile.NamedTemporaryFile(mode='w', suffix='.scad', delete_on_close=False)
+    oscad_filename = fp_scad.name
+    stl_filename = args.output
+else:
+    oscad_filename = args.output
+    fp_scad = open(oscad_filename, 'w')
+
 fp_scad.write('''
 // Auto generated file by jig-gen, the awesome automatic
 // jig generator for your PCB designs.
@@ -682,9 +698,36 @@ module complete_model() {
     mounted_component_pockets();
   }
 }
-
-complete_model();
 ''')
+
+else:
+    fp_scad.write('''
+module complete_model() {
+    union() {
+        if(base_is_solid==0) {
+            base_mesh();
+        } else {
+            base_solid();
+        }
+        component_shell_support();
+        mounted_component_shells();
+    }
+}
+''')
+
+fp_scad.write('''
+orient_to_print=%d;
+if(orient_to_print == 1) {
+  rotate([180,0,0])
+    complete_model();
+} else {
+    complete_model();
+}
+'''%(not args.keep_orientation))
+
+
+# Help understanding
+if jig_style_soldering_helper:
     fp_scad.write('''
 // Stackup of the mesh
 module stackup() {
@@ -721,27 +764,27 @@ module stackup() {
     pcb_min_x,
     pcb_max_x)
 )
-else:
-    fp_scad.write('''
-module complete_model() {
-    union() {
-        if(base_is_solid==0) {
-            base_mesh();
-        } else {
-            base_solid();
-        }
-        component_shell_support();
-        mounted_component_shells();
-    }
-}
-complete_model();
-''')
 
 fp_scad.write('''
 /*
 %s
 */
 '''%(config_text))
+
+fp_scad.close()
+
+if args.output_format == 'stl':
+    cmd = [ 'openscad', '--hardwarnings', '-o', stl_filename, oscad_filename]
+    print('Generating output using : %s'%(' '.join(cmd)))
+    print('-----------------------------------------')
+    retcode = subprocess.call(cmd)
+    print('-----------------------------------------')
+    if retcode !=0 :
+        print('ERROR: OpenSCAD Failed, exit code %d'%(retcode))
+    else:
+        print('Done, output : %s'%(stl_filename))
+else:
+    print('Done, output : %s'%(oscad_filename))
 #
 #
 # Coordinate system notes:
