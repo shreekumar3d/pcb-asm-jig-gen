@@ -33,48 +33,35 @@ from pprint import pprint
 import numpy as np
 import sys
 import math
+import tomllib
+import json
 
+
+cfg = tomllib.load(open('config.toml','rb'))
+print(json.dumps(cfg, indent=2))
 mesh_cache = {}
 
-pcb_thickness = 1.6 # FIXME: get this from KiCAD
-# shells are generated to hold components. These don't
-# stretch all the way till the board. They fall short
-# by this 'clearance' value.  This serves two purposes:
-#   1. You can see from the sides that the components
-#      are sitting flush with the PCB before you solder
-#      them
-#   2. You may have SMD components on the boards placed
-#      very close to the through-hole stuff. This is an
-#      indirect strategy to avoid them.
-#      FIXME: implement a direct solution to ensure this
-#      never happens. On AtiVEGA, the USB power connector
-#      also intersects the shells. So this is not just an
-#      SMD thing. Potential idea - perhaps add all the
-#      "perimeter solids" first, then subtract the
-#      "outline solids", then subtract an extended
-#      bounding box of each other individual component not
-#      considered for the shells.
-shell_clearance = 1 # a 1206 SMD resistor is 0.55mm. Tune further if required
-
-base_is_solid = 0
-
-base_thickness = 1
-
-shell_protrude = 1 # shells will come above PCB by this much, so user can enable and see
-
-pcb_perimeter_height = 2 # PCB perimeter height, beyond the base
-
+pcb_thickness = cfg['pcb']['thickness']
+shell_clearance = cfg['component_holder']['shell_clearance']
+shell_gap = cfg['component_holder']['shell_gap']
+shell_thickness = cfg['component_holder']['shell_thickness']
+base_is_solid = 0 if cfg['pcb_holder']['base_style']=="mesh" else 1
+base_thickness = cfg['pcb_holder']['base_thickness']
+pcb_perimeter_height = cfg['pcb_holder']['base_perimeter_height']
+pcb_holder_gap = cfg['pcb_holder']['gap']
+pcb_holder_overlap = cfg['pcb_holder']['overlap']
+pcb_holder_perimeter = cfg['pcb_holder']['perimeter']
 # AtiVEGA has no mounting hole on one corner.
 # Support enforcers ensure that a board outline is
 # included close to these places
-forced_pcb_supports = [
-  [ 121.1, -152.0] # non-existent mounting hole location near to Pico
-]
+forced_pcb_supports = cfg['pcb_holder']['forced_lips']
 
 # Selectively process these component references
-ref_filter_list = [] # ['U1', 'J2']
+ref_filter_list = cfg['refs']['do_not_process']
 
-mounting_hole_support_size = 15
+mounting_hole_support_size = cfg['pcb_holder']['lip_dimensions']
+
+shell_protrude = 1 # shells will come above PCB by this much, so user can enable and see
 
 def units_to_mm(x):
     return x/1000000
@@ -290,10 +277,10 @@ $fs = 0.05;
 
 // Gap for components to slide into their shell,
 // on all sides in the horizontal plane (in mm)
-shell_gap = 0.1;
+shell_gap = %s;
                 
 // Thickness of shells (in mm)
-shell_thickness = 1.2;
+shell_thickness = %s;
 
 // Thickness of PCB (in mm)
 pcb_thickness=%s;
@@ -326,8 +313,9 @@ base_is_solid = %s;
 // Lips that lie in a square of this size (in mm)
 // will be part of the model.
 mounting_hole_support_size=%s;
-'''%(pcb_thickness, shell_clearance,shell_protrude, base_thickness,
-     base_is_solid, mounting_hole_support_size))
+'''%(shell_gap, shell_thickness, pcb_thickness, shell_clearance,
+     shell_protrude, base_thickness, base_is_solid,
+     mounting_hole_support_size))
 # Process the PCB edge
 #
 # KiCAD has an Edge Cuts layer. Drawings on this layer define
@@ -378,7 +366,7 @@ mounting_hole_support_size=%s;
 # Coordinate system note: we'll do all the ops on the
 # edges in kicad coordinate system. The selected edge
 # shall be transformed to our system (negate Y)
-arc_resolution = 0.1
+arc_resolution = cfg['pcb']['tesellate_edge_cuts_curve']
 
 def tess_iters(r, degrees):
     return int(abs(((2*math.pi*r)/arc_resolution)/(360/degrees)))
@@ -674,14 +662,14 @@ for th in th_info:
 
 fp_scad.write('''
 // Gap (in mm) between board edge and slot on which the board sits
-pcb_gap=0.3;
+pcb_gap=%s;
 
 // Width of the lip (in mm) on which the board rests
-pcb_overlap=0.3;
+pcb_overlap=%s;
 
 // PCB holder's wall thickness (in mm)
 // This will be the thickness after the gap
-pcb_holder_perimeter=1.6;
+pcb_holder_perimeter=%s;
 
 // The board can have a (lower) perimeter for added
 // strength/aesthetics.  Perimeter height is above
@@ -694,7 +682,7 @@ pcb_perimeter_height = %s;
 
 // Height of the tallest component on the top side
 topmost_z=%s;
-'''%(pcb_perimeter_height, topmost_z))
+'''%(pcb_holder_gap, pcb_holder_overlap, pcb_holder_perimeter, pcb_perimeter_height, topmost_z))
 
 fp_scad.write('// Height of the individual components\n')
 for shell_info in all_shells:

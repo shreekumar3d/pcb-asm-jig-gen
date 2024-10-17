@@ -1,0 +1,50 @@
+# All values are in mm, unless explicitly
+# stated otherwise
+#
+# Please see documentation for meaning of "gap",
+# "overlap", and "perimeter"
+#
+
+[pcb]
+thickness = 1.6
+tesellate_edge_cuts_curve = 0.1
+
+# pcb holder is the overall jig generated
+#
+# It has a slot for the PCB to sit, with "lips"
+#
+# Lips are typically created around the mounting
+# holes on the PCB. Most PCBs are a rounded
+# rectangle, or a rectangle.
+#
+# FIXME: This was used as heurestic before we had
+# proper edge cuts processing. Now we can create
+# it on every edge point
+#
+[pcb_holder]
+gap = 0.3
+overlap = 0.3
+perimeter = 1.6
+base_thickness = 1 # Z height of base
+base_style = "mesh" # see documentation for other choices
+base_perimeter_height = 2 # this length is additional to the base
+forced_lips = [
+  #  [ X, Y ] coordinates from KiCAD PCB
+]
+lip_dimensions = 15
+
+# For each through hole component (ref), the jig
+# generator creates a "shell" that serves as a component
+# holder for the ref in its exact location on the board
+[component_holder]
+shell_clearance = 1
+shell_gap = 0.1
+shell_thickness = 1.2
+
+# Generic properties around component refs
+[refs]
+do_not_process = [
+  # list of refs that we should ignore
+]
+
+
