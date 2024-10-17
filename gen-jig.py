@@ -51,7 +51,7 @@ overlap = 0.3
 perimeter = 1.6
 base_perimeter_height = 2
 forced_lips = [ ]
-lip_dimensions = 15
+lip_size = 15
 
 [component_holder]
 shell_clearance = 1
@@ -231,7 +231,7 @@ pcb_holder_perimeter = cfg['pcb_holder']['perimeter']
 forced_pcb_supports = cfg['pcb_holder']['forced_lips']
 ref_do_not_process = cfg['refs']['do_not_process']
 ref_process_only_these = cfg['refs']['process_only_these']
-mounting_hole_support_size = cfg['pcb_holder']['lip_dimensions']
+lip_size = cfg['pcb_holder']['lip_size']
 arc_resolution = cfg['pcb']['tesellate_edge_cuts_curve']
 jig_style = cfg['jig_options']['style']
 jig_style_range = ['soldering_helper', 'component_shell']
@@ -353,10 +353,10 @@ base_is_solid = %s;
 // Board will sit on a lip, close to mounting holes
 // Lips that lie in a square of this size (in mm)
 // will be part of the model.
-mounting_hole_support_size=%s;
+lip_size=%s;
 '''%(shell_gap, shell_thickness, pcb_thickness, shell_clearance,
      shell_protrude, base_thickness, mesh_line_width, base_is_solid,
-     mounting_hole_support_size))
+     lip_size))
 
 pcb_segments = []
 pcb_filled_shapes = []
@@ -672,15 +672,30 @@ module pcb_perimeter_short() {
 ''')
 
 if jig_style_soldering_helper:
-    fp_scad.write('corner_support_height=60;\n') # FIXME: this is laziness! compute it!
-    fp_scad.write('module pcb_corner_support() {\n')
-    fp_scad.write('  translate([0,0,0])\n')
-    fp_scad.write('  union() {\n')
-    # FIXME: Policy: include PCB bounding box corners in support enforcers
-    for pt in mounting_holes+pcb_bb_corners:
-        fp_scad.write('    translate([%s,%s,0])\n'%(pt[0],pt[1]))
-        fp_scad.write('      cube([mounting_hole_support_size, mounting_hole_support_size,  corner_support_height],center = true);\n')
-    fp_scad.write('  }\n')
+    lip_lines = edge_cuts.compute_lips(arc_resolution, pcb_filled_shapes[0], lip_size)
+    #print('lip lines no = ',len(lip_lines))
+    #pprint(lip_lines)
+    fp_scad.write('''
+module peri_line(start, end, line_width) {
+    hull() {
+        translate(start) circle(d=line_width);
+        translate(end) circle(d=line_width);
+    }
+}
+''')
+    fp_scad.write('module pcb_support_lips() {\n')
+    # FIXME: find a good way to compute the magic factor 1.2
+    # Essentially - should the lips be rounded or flat ?
+    fp_scad.write('  lip_width = max(pcb_gap+pcb_holder_perimeter, pcb_overlap)*1.2;\n')
+    fp_scad.write('  tiny_dimension = 0.001;\n')
+    fp_scad.write('  base_z =  pcb_thickness+topmost_z+base_thickness+2*tiny_dimension;\n')
+    fp_scad.write('  translate([0,0,-tiny_dimension])\n')
+    fp_scad.write('    linear_extrude(base_z)\n')
+    fp_scad.write('      union() {\n')
+    for line in lip_lines:
+        # FIXME: see the -y below? This is ugliness. Aim for consistency
+        fp_scad.write('    peri_line([%f,%f], [%f,%f], lip_width);'%(line[0][0], -line[0][1], line[1][0], -line[1][1]))
+    fp_scad.write('      }\n')
     fp_scad.write('}\n')
 
     fp_scad.write('''
@@ -690,7 +705,7 @@ module complete_model() {
   difference() {
     union() {
       intersection() {
-        pcb_corner_support();
+        pcb_support_lips();
         pcb_holder();
       };
       pcb_perimeter_short();

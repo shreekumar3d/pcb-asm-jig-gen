@@ -29,7 +29,7 @@ base_perimeter_height = 2 # this length is additional to the base
 forced_lips = [
   #  [ X, Y ] coordinates from KiCAD PCB
 ]
-lip_dimensions = 15
+lip_size = 15
 
 # For each through hole component (ref), the jig
 # generator creates a "shell" that serves as a component
