@@ -54,3 +54,6 @@ process_only_these = [
 style = "soldering_helper" # or "component_shell"
 base_thickness = 1 # Z height of base
 base_style = "mesh" # see documentation for other choices
+
+[base_mesh]
+line_width = 1.6

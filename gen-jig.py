@@ -66,6 +66,9 @@ process_only_these = []
 style = "soldering_helper"
 base_thickness = 1
 base_style = "mesh"
+
+[base_mesh]
+line_width = 1.6
 '''
 
 def get_th_info(board, mounting_holes, ref_process_only_these, ref_do_not_process):
@@ -220,6 +223,7 @@ shell_thickness = cfg['component_holder']['shell_thickness']
 base_is_solid = 0 if cfg['jig_options']['base_style']=="mesh" else 1
 
 base_thickness = cfg['jig_options']['base_thickness']
+mesh_line_width = cfg['base_mesh']['line_width']
 pcb_perimeter_height = cfg['pcb_holder']['base_perimeter_height']
 pcb_holder_gap = cfg['pcb_holder']['gap']
 pcb_holder_overlap = cfg['pcb_holder']['overlap']
@@ -333,6 +337,9 @@ shell_protrude=%s;
 // sits)
 base_thickness = %s;
 
+// Line width in the mesh
+mesh_line_width = %s;
+
 // By default, we generate a base with a delaunay
 // frame holding the shells together.
 //
@@ -348,7 +355,7 @@ base_is_solid = %s;
 // will be part of the model.
 mounting_hole_support_size=%s;
 '''%(shell_gap, shell_thickness, pcb_thickness, shell_clearance,
-     shell_protrude, base_thickness, base_is_solid,
+     shell_protrude, base_thickness, mesh_line_width, base_is_solid,
      mounting_hole_support_size))
 
 pcb_segments = []
@@ -537,8 +544,8 @@ pcb_bb_corners = [
 fp_scad.write('''
 module wide_line(start, end) {
     hull() {
-        translate(start) cylinder(base_thickness);
-        translate(end) cylinder(base_thickness);
+        translate(start) cylinder(h=base_thickness, d=mesh_line_width);
+        translate(end) cylinder(h=base_thickness, d=mesh_line_width);
     }
 }\n\n''')
 
