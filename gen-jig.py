@@ -199,8 +199,8 @@ if args.config:
     cfg = tomllib.load(open(args.config,'rb'))
     #print(json.dumps(cfg, indent=2))
 else:
-    config_text = 'Internal Defaults'
-    cfg = tomllib.loads(default_cfg())
+    config_text = default_cfg()
+    cfg = tomllib.loads(config_text)
 
 pcb_thickness = cfg['pcb']['thickness']
 shell_clearance = cfg['component_holder']['shell_clearance']
@@ -265,6 +265,18 @@ geom_lines = []
 output_fname = 'test.scad'
 print('Creating output in %s...\n'%(output_fname))
 fp_scad = open(output_fname, 'w')
+fp_scad.write('''
+// Auto generated file by jig-gen, the awesome automatic
+// jig generator for your PCB designs.
+//
+// Input board file   : %s
+// Configuration file : %s
+//
+// Complete configuration file is embedded at the end of this
+// file.
+'''%(args.kicad_pcb,
+    '(Tool Default Internal Configuration)' if not args.config else args.config))
+
 # We use OpenSCAD to do the grunt work of building the
 # actual model for us. Tesellation level must be set
 # to match or exceed the limits of 3D printing.
@@ -725,6 +737,11 @@ module complete_model() {
 complete_model();
 ''')
 
+fp_scad.write('''
+/*
+%s
+*/
+'''%(config_text))
 #
 #
 # Coordinate system notes:
