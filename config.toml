@@ -25,8 +25,6 @@ tesellate_edge_cuts_curve = 0.1
 gap = 0.3
 overlap = 0.3
 perimeter = 1.6
-base_thickness = 1 # Z height of base
-base_style = "mesh" # see documentation for other choices
 base_perimeter_height = 2 # this length is additional to the base
 forced_lips = [
   #  [ X, Y ] coordinates from KiCAD PCB
@@ -46,5 +44,13 @@ shell_thickness = 1.2
 do_not_process = [
   # list of refs that we should ignore
 ]
+process_only_these = [
+  # list of refs to process
+  # this takes precedence over "do_not_process"
+  # technically the two should be exclusive
+]
 
-
+[jig_options]
+style = "soldering_helper" # or "component_shell"
+base_thickness = 1 # Z height of base
+base_style = "mesh" # see documentation for other choices

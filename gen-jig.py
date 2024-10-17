@@ -37,10 +37,18 @@ import mesh_ops
 
 shell_protrude = 1 # shells will come above PCB by this much, so user can enable and see
 
-def get_th_info(board, mounting_holes):
+def get_th_info(board, mounting_holes, ref_process_only_these, ref_do_not_process):
     fp_list = board.Footprints()
     th_info = []
     for fp in fp_list:
+        ref = fp.GetReference()
+        if len(ref_process_only_these)>0:
+            # process_only_these takes precedence
+            if ref not in ref_process_only_these:
+                continue
+        elif len(ref_do_not_process)>0 and ref not in ref_do_not_process:
+            # exclusion is enforced if process_only_these isn't specified
+            continue
         fp_x = units_to_mm(fp.GetX())
         fp_y = -units_to_mm(fp.GetY())
         #print(fp.GetReference())
@@ -159,14 +167,16 @@ pcb_thickness = cfg['pcb']['thickness']
 shell_clearance = cfg['component_holder']['shell_clearance']
 shell_gap = cfg['component_holder']['shell_gap']
 shell_thickness = cfg['component_holder']['shell_thickness']
-base_is_solid = 0 if cfg['pcb_holder']['base_style']=="mesh" else 1
-base_thickness = cfg['pcb_holder']['base_thickness']
+base_is_solid = 0 if cfg['jig_options']['base_style']=="mesh" else 1
+
+base_thickness = cfg['jig_options']['base_thickness']
 pcb_perimeter_height = cfg['pcb_holder']['base_perimeter_height']
 pcb_holder_gap = cfg['pcb_holder']['gap']
 pcb_holder_overlap = cfg['pcb_holder']['overlap']
 pcb_holder_perimeter = cfg['pcb_holder']['perimeter']
 forced_pcb_supports = cfg['pcb_holder']['forced_lips']
-ref_filter_list = cfg['refs']['do_not_process']
+ref_do_not_process = cfg['refs']['do_not_process']
+ref_process_only_these = cfg['refs']['process_only_these']
 mounting_hole_support_size = cfg['pcb_holder']['lip_dimensions']
 # We'll tesellate arcs and circles with this resolution
 # Meaning consecutive points will be spaced this far
@@ -182,12 +192,26 @@ mounting_hole_support_size = cfg['pcb_holder']['lip_dimensions']
 #
 arc_resolution = cfg['pcb']['tesellate_edge_cuts_curve']
 
+jig_style = cfg['jig_options']['style']
+jig_style_range = ['soldering_helper', 'component_shell']
+if jig_style not in jig_style_range:
+    print('BAD value "%s" for jig_options/style. Valid values are : ' %
+          (jig_style,','.join(jig_style_range)))
+    sys.exit(-1)
+jig_style_soldering_helper = (jig_style == 'soldering_helper')
+jig_style_component_shell = (jig_style == 'component_shell')
+
+if jig_style_component_shell:
+    if shell_clearance>0:
+        print('INFO: Generating component shells, shell_clearance=%s will be ignored.'
+            %(shell_clearance))
+        shell_clearance = 0
 parser = argparse.ArgumentParser()
 parser.add_argument("kicad_pcb")
 args = parser.parse_args()
 board = pcbnew.LoadBoard(args.kicad_pcb)
 mounting_holes = forced_pcb_supports
-th_info = get_th_info(board, mounting_holes)
+th_info = get_th_info(board, mounting_holes, ref_process_only_these, ref_do_not_process)
 
 # Setup environment for file name expansion
 os.environ["KIPRJMOD"] = os.path.split(args.kicad_pcb)[0]
@@ -307,12 +331,6 @@ fp_centers = []
 topmost_z = 0
 # For each TH component on the board
 for th in th_info:
-    #if th['ref'] in ['U1','U4','U5']:
-    #    print('Skipping known component %s to work around issues'%(th['ref']))
-    #    continue
-    if len(ref_filter_list)>0 and th['ref'] not in ref_filter_list:
-        #print('Skipping ', th['ref'])
-        continue
     print('Processing ', th['ref'])
     # each footprint can have multiple models.
     # each model that is "in contact" with the board will generate
@@ -447,14 +465,6 @@ fp_scad.write('  }\n')
 fp_scad.write('}\n')
 fp_scad.write('\n')
 
-fp_scad.write('''
-module wide_line(start, end) {
-    hull() {
-        translate(start) cylinder(base_thickness);
-        translate(end) cylinder(base_thickness);
-    }
-}\n\n''')
-
 # Compute bounding box of PCB
 # FIXME: make this min, max code less verbose
 pcb_min_x = pcb_max_x = pcb_edge_points[0][0]
@@ -472,14 +482,26 @@ pcb_bb_corners = [
     [pcb_max_x , pcb_max_y]
 ]
 
+fp_scad.write('''
+module wide_line(start, end) {
+    hull() {
+        translate(start) cylinder(base_thickness);
+        translate(end) cylinder(base_thickness);
+    }
+}\n\n''')
+
 # Delaunay triangulation will be done on the following points
-# 1. centers of all TH footprints
-# 2. mounting holes
-# 3. bounding box corners of PCB edge. mounting holes are
-#    inside the PCB and don't extend all the way to the edge.
-#    If we don't include them, we may end up having a separate
-#    "delaunay island", depending on the exact PCB.
-dt_centers = fp_centers + mounting_holes + pcb_bb_corners
+if jig_style_soldering_helper:
+    # 1. centers of all considered footprints
+    # 2. mounting holes
+    # 3. bounding box corners of PCB edge. mounting holes are
+    #    inside the PCB and don't extend all the way to the edge.
+    #    If we don't include them, we may end up having a separate
+    #    "delaunay island", depending on the exact PCB.
+    dt_centers = fp_centers + mounting_holes + pcb_bb_corners
+else:
+    # it's enough to link footprint centers
+    dt_centers = fp_centers
 
 fp_scad.write('''
 module base_solid() {
@@ -491,11 +513,12 @@ module base_solid() {
 };
 ''')
 
-fp_scad.write('module base_delaunay() {\n')
-fp_scad.write('  translate([0,0,pcb_thickness+topmost_z]) {\n')
+fp_scad.write('module base_mesh() {\n')
+fp_scad.write('  translate([0,0,pcb_thickness+topmost_z])\n')
 fp_scad.write('  intersection() { \n')
 fp_scad.write('    union(){ \n')
 if len(dt_centers)>=4:
+    fp_scad.write('        // delunay triangulated mesh\n')
     d_verts = np.array(dt_centers)
     d_tris = scipy.spatial.Delaunay(d_verts)
     for tri in d_tris.simplices:
@@ -510,7 +533,17 @@ if len(dt_centers)>=4:
         fp_scad.write('      wide_line(%s,%s);\n'%(b,c))
         fp_scad.write('      wide_line(%s,%s);\n'%(c,a))
 else:
-    print("WARNING: no centers for delaunay!")
+    if len(dt_centers)>1:
+        av = dt_centers[0]
+        a = '[%s,%s]'%(av[0],av[1])
+        bv = dt_centers[1]
+        b = '[%s,%s]'%(bv[0],bv[1])
+        fp_scad.write('      wide_line(%s,%s);\n'%(a,b))
+    if len(dt_centers)==3:
+        cv = dt_centers[2]
+        c = '[%s,%s]'%(cv[0],cv[1])
+        fp_scad.write('      wide_line(%s,%s);\n'%(b,c))
+        fp_scad.write('      wide_line(%s,%s);\n'%(c,a))
 
 fp_scad.write('    }\n')
 fp_scad.write('''
@@ -522,7 +555,6 @@ fp_scad.write('''
     }
 }
 ''')
-fp_scad.write('}\n')
 
 fp_scad.write('module component_shell_support() {\n')
 fp_scad.write('  translate([0,0,pcb_thickness+topmost_z]) {\n')
@@ -542,7 +574,8 @@ fp_scad.write('    }\n')
 fp_scad.write('  }\n')
 fp_scad.write('}\n')
 
-fp_scad.write('''
+if jig_style_soldering_helper:
+    fp_scad.write('''
 module pcb_holder() {
   // solid between perimeter & outline
   // full height
@@ -579,18 +612,19 @@ module pcb_perimeter_short() {
 }
 ''')
 
-fp_scad.write('corner_support_height=60;\n') # FIXME: this is laziness! compute it!
-fp_scad.write('module pcb_corner_support() {\n')
-fp_scad.write('  translate([0,0,0])\n')
-fp_scad.write('  union() {\n')
-# FIXME: Policy: include PCB bounding box corners in support enforcers
-for pt in mounting_holes+pcb_bb_corners:
-    fp_scad.write('    translate([%s,%s,0])\n'%(pt[0],pt[1]))
-    fp_scad.write('      cube([mounting_hole_support_size, mounting_hole_support_size,  corner_support_height],center = true);\n')
-fp_scad.write('  }\n')
-fp_scad.write('}\n')
+if jig_style_soldering_helper:
+    fp_scad.write('corner_support_height=60;\n') # FIXME: this is laziness! compute it!
+    fp_scad.write('module pcb_corner_support() {\n')
+    fp_scad.write('  translate([0,0,0])\n')
+    fp_scad.write('  union() {\n')
+    # FIXME: Policy: include PCB bounding box corners in support enforcers
+    for pt in mounting_holes+pcb_bb_corners:
+        fp_scad.write('    translate([%s,%s,0])\n'%(pt[0],pt[1]))
+        fp_scad.write('      cube([mounting_hole_support_size, mounting_hole_support_size,  corner_support_height],center = true);\n')
+    fp_scad.write('  }\n')
+    fp_scad.write('}\n')
 
-fp_scad.write('''
+    fp_scad.write('''
 // This _is_ the entire jig model. Structured such that
 // you can individually check the parts
 module complete_model() {
@@ -615,8 +649,7 @@ module complete_model() {
 
 complete_model();
 ''')
-
-fp_scad.write('''
+    fp_scad.write('''
 // Stackup of the mesh
 module stackup() {
   pcb_min_x = %s;
@@ -652,6 +685,22 @@ module stackup() {
     pcb_min_x,
     pcb_max_x)
 )
+else:
+    fp_scad.write('''
+module complete_model() {
+    union() {
+        if(base_is_solid==0) {
+            base_mesh();
+        } else {
+            base_solid();
+        }
+        component_shell_support();
+        mounted_component_shells();
+    }
+}
+complete_model();
+''')
+
 #
 #
 # Coordinate system notes:
