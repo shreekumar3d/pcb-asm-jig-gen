@@ -37,6 +37,35 @@ import mesh_ops
 
 shell_protrude = 1 # shells will come above PCB by this much, so user can enable and see
 
+def default_cfg():
+    return '''
+[pcb]
+thickness = 1.6
+tesellate_edge_cuts_curve = 0.1
+
+[pcb_holder]
+gap = 0.3
+overlap = 0.3
+perimeter = 1.6
+base_perimeter_height = 2
+forced_lips = [ ]
+lip_dimensions = 15
+
+[component_holder]
+shell_clearance = 1
+shell_gap = 0.1
+shell_thickness = 1.2
+
+[refs]
+do_not_process = []
+process_only_these = []
+
+[jig_options]
+style = "soldering_helper"
+base_thickness = 1
+base_style = "mesh"
+'''
+
 def get_th_info(board, mounting_holes, ref_process_only_these, ref_do_not_process):
     fp_list = board.Footprints()
     th_info = []
@@ -160,8 +189,18 @@ def gen_shell_shape(ref, x, y, rot, min_z, max_z, verts, mod_lines, geom_lines):
 # Execution starts here
 #
 
-cfg = tomllib.load(open('config.toml','rb'))
-print(json.dumps(cfg, indent=2))
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", help='Use specified configuration options file')
+parser.add_argument("kicad_pcb", help='KiCAD PCB file (.kicad_pcb) to process')
+args = parser.parse_args()
+
+if args.config:
+    config_text = open(args.config, 'r').read()
+    cfg = tomllib.load(open(args.config,'rb'))
+    #print(json.dumps(cfg, indent=2))
+else:
+    config_text = 'Internal Defaults'
+    cfg = tomllib.loads(default_cfg())
 
 pcb_thickness = cfg['pcb']['thickness']
 shell_clearance = cfg['component_holder']['shell_clearance']
@@ -178,25 +217,12 @@ forced_pcb_supports = cfg['pcb_holder']['forced_lips']
 ref_do_not_process = cfg['refs']['do_not_process']
 ref_process_only_these = cfg['refs']['process_only_these']
 mounting_hole_support_size = cfg['pcb_holder']['lip_dimensions']
-# We'll tesellate arcs and circles with this resolution
-# Meaning consecutive points will be spaced this far
-# apart (in mm).
-#
-# Considering a circle of radius r, circumference is
-# 2*pi*r. Sampling at arc_resolution, we get
-# 2*pi*r/arc_resolution points (approximately).
-#
-# So, a 3 mm radius, 90 degree arc will have
-# (2*3*3.14)/0.1 = 47 points - or one every 2 degrees.
-# So choose with care
-#
 arc_resolution = cfg['pcb']['tesellate_edge_cuts_curve']
-
 jig_style = cfg['jig_options']['style']
 jig_style_range = ['soldering_helper', 'component_shell']
 if jig_style not in jig_style_range:
     print('BAD value "%s" for jig_options/style. Valid values are : ' %
-          (jig_style,','.join(jig_style_range)))
+        (jig_style,','.join(jig_style_range)))
     sys.exit(-1)
 jig_style_soldering_helper = (jig_style == 'soldering_helper')
 jig_style_component_shell = (jig_style == 'component_shell')
@@ -206,9 +232,7 @@ if jig_style_component_shell:
         print('INFO: Generating component shells, shell_clearance=%s will be ignored.'
             %(shell_clearance))
         shell_clearance = 0
-parser = argparse.ArgumentParser()
-parser.add_argument("kicad_pcb")
-args = parser.parse_args()
+
 board = pcbnew.LoadBoard(args.kicad_pcb)
 mounting_holes = forced_pcb_supports
 th_info = get_th_info(board, mounting_holes, ref_process_only_these, ref_do_not_process)
@@ -636,7 +660,7 @@ module complete_model() {
       };
       pcb_perimeter_short();
       if(base_is_solid==0) {
-        base_delaunay();
+        base_mesh();
         } else {
         base_solid();
       }
