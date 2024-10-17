@@ -21,9 +21,7 @@ import scipy.spatial
 from scipy.spatial.transform import Rotation
 
 # Standard imports
-import tempfile
 import argparse
-import subprocess
 import os
 import functools
 from pprint import pprint
@@ -35,8 +33,8 @@ import json
 # Local imports
 from jigcommon import *
 import edge_cuts
+import mesh_ops
 
-mesh_cache = {}
 shell_protrude = 1 # shells will come above PCB by this much, so user can enable and see
 
 def get_th_info(board, mounting_holes):
@@ -85,56 +83,6 @@ def get_th_info(board, mounting_holes):
         #print(fp.Footprint().GetName())
         #pprint(dir(fp.Footprint()))
     return th_info
-
-# returns flat array of xyz coordinates
-def load_obj_mesh_verts(filename, scale=1.0):
-    reader = tinyobjloader.ObjReader()
-    ret = reader.ParseFromFile(filename)
-    if ret == False:
-        raise RuntimeError("Unable to load OBJ file %s"%(filename))
-    attrib = reader.GetAttrib()
-    nverts = len(attrib.vertices)//3 # attrib.vertices is contiguous x,y,z
-    mesh = np.array(attrib.vertices)
-    mesh *= scale
-    mesh.resize((nverts,3)) # in place change in dims
-    return mesh
-
-def load_mesh(filename):
-    global mesh_cache
-    retval = None
-    if filename in mesh_cache:
-        print('Returning %s from cache'%(filename))
-        return mesh_cache[filename]
-
-    if filename.endswith('.obj'):
-        retval = load_obj_mesh_verts(filename)
-    elif filename.endswith('.step') or filename.endswith('.stp'):
-        with tempfile.NamedTemporaryFile(suffix='.obj') as fp:
-            print('Converting STEP file %s to OBJ file %s'%(filename, fp.name))
-            retcode = subprocess.call([
-                'freecad.cmd', 'stp2obj.py', filename, fp.name ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            if retcode != 0:
-                raise RuntimeError("Unable to convert STEP file %s to obj"%(filename))
-            retval = load_obj_mesh_verts(fp.name)
-    elif filename.endswith('.wrl') or filename.endswith('.vrml'):
-        with tempfile.NamedTemporaryFile(suffix='.obj') as fp:
-            print('Converting mesh file %s to OBJ file %s'%(filename, fp.name))
-            retcode = subprocess.call([
-                'meshlabserver', '-i', filename, '-o', fp.name ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            if retcode != 0:
-                raise RuntimeError("Unable to convert file %s to obj"%(filename))
-            retval = load_obj_mesh_verts(fp.name, scale=2.54) # VRML files are in 1/2.54 mm units
-    else:
-        raise RuntimeError("No converter to load %s"%(filename))
-
-    mesh_cache[filename] = retval
-    return retval
 
 # generate module names used in oscad
 def ref2outline(ref):
@@ -254,7 +202,7 @@ for comp in th_info:
     # We're guaranteed to have at-least one 3d model
     for modinfo in comp['models']:
         model_filename = os.path.expandvars(modinfo['model'])
-        modinfo['mesh'] = load_mesh(model_filename)
+        modinfo['mesh'] = mesh_ops.load_mesh(model_filename)
 #pprint(th_info)
 
 # Footprint useful things
