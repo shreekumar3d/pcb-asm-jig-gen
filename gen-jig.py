@@ -174,8 +174,15 @@ args = parser.parse_args()
 board = pcbnew.LoadBoard(args.kicad_pcb)
 th_info = get_th_info(board)
 
-# test if you can load all models
+# Setup environment for file name expansion
 os.environ["KIPRJMOD"] = os.path.split(args.kicad_pcb)[0]
+path_sys_3dmodels = '/usr/share/kicad/3dmodels'
+for ver in [6,7,8]: # Hmm - would we need more ?
+    env_var_name = 'KICAD%d_3DMODEL_DIR'%(ver)
+    if env_var_name not in os.environ:
+        os.environ[env_var_name] = path_sys_3dmodels
+
+# test if you can load all models
 for comp in th_info:
     # We're guaranteed to have at-least one 3d model
     for modinfo in comp['models']:
