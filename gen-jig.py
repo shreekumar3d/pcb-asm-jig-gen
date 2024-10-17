@@ -36,31 +36,7 @@ import math
 import tomllib
 import json
 
-
-cfg = tomllib.load(open('config.toml','rb'))
-print(json.dumps(cfg, indent=2))
 mesh_cache = {}
-
-pcb_thickness = cfg['pcb']['thickness']
-shell_clearance = cfg['component_holder']['shell_clearance']
-shell_gap = cfg['component_holder']['shell_gap']
-shell_thickness = cfg['component_holder']['shell_thickness']
-base_is_solid = 0 if cfg['pcb_holder']['base_style']=="mesh" else 1
-base_thickness = cfg['pcb_holder']['base_thickness']
-pcb_perimeter_height = cfg['pcb_holder']['base_perimeter_height']
-pcb_holder_gap = cfg['pcb_holder']['gap']
-pcb_holder_overlap = cfg['pcb_holder']['overlap']
-pcb_holder_perimeter = cfg['pcb_holder']['perimeter']
-# AtiVEGA has no mounting hole on one corner.
-# Support enforcers ensure that a board outline is
-# included close to these places
-forced_pcb_supports = cfg['pcb_holder']['forced_lips']
-
-# Selectively process these component references
-ref_filter_list = cfg['refs']['do_not_process']
-
-mounting_hole_support_size = cfg['pcb_holder']['lip_dimensions']
-
 shell_protrude = 1 # shells will come above PCB by this much, so user can enable and see
 
 def units_to_mm(x):
@@ -68,6 +44,53 @@ def units_to_mm(x):
 
 def kcpt2pt(pt):
     return [units_to_mm(pt[0]), units_to_mm(pt[1])]
+
+def get_th_info(board, mounting_holes):
+    fp_list = board.Footprints()
+    th_info = []
+    for fp in fp_list:
+        fp_x = units_to_mm(fp.GetX())
+        fp_y = -units_to_mm(fp.GetY())
+        #print(fp.GetReference())
+        #print('  Position(mm):', fp_x, fp_y)
+        #print('  On side     :', fp.GetSide())
+        #print('  Orientation :', fp.GetOrientation().AsDegrees())
+        #print('  DNP ?       :', fp.IsDNP())
+        #print('  TH ?        :', fp.HasThroughHolePads())
+        if fp.HasThroughHolePads():
+            thc_models = []
+            for mod3d in fp.Models():
+                # NOTE XXX don't hold references to internal vectors - they can get
+                # messed up! Make copies!
+                thc_models.append({
+                        'model'    : mod3d.m_Filename,
+                        'offset'   : [mod3d.m_Offset[0], mod3d.m_Offset[1], mod3d.m_Offset[2]],
+                        'scale'    : [mod3d.m_Scale[0], mod3d.m_Scale[1], mod3d.m_Scale[2]],
+                        'rotation' : [mod3d.m_Rotation[0], mod3d.m_Rotation[1], mod3d.m_Rotation[2]]
+                })
+            if len(thc_models)>0:
+                th_info.append({
+                    'ref': fp.GetReference(),
+                    'x' : fp_x,
+                    'y' : fp_y,
+                    'orientation' : fp.GetOrientation().AsDegrees(),
+                    'side' : fp.GetSide(),
+                    'position' : fp.GetPosition(),
+                    'models' : thc_models,
+                    'kfp' : fp}) # Reference if we need more info later
+            for fn in fp.Fields():
+                #print(fn)
+                #print(dir(fn))
+                #print(fn.GetName(), fn.GetText(), fn.GetShownText(True), fn.GetHyperlink(), fn.GetCanonicalName(), fn.GetFriendlyName(), fn.GetParentFootprint(), fn.GetParentAsString())
+                if fn.GetText().startswith('MountingHole'):
+                    #print('  --> Is a Mounting Hole')
+                    mounting_holes.append(
+                        [fp_x, fp_y]
+                    )
+                    break
+        #print(fp.Footprint().GetName())
+        #pprint(dir(fp.Footprint()))
+    return th_info
 
 # returns flat array of xyz coordinates
 def load_obj_mesh_verts(filename, scale=1.0):
@@ -119,83 +142,7 @@ def load_mesh(filename):
     mesh_cache[filename] = retval
     return retval
 
-mounting_holes = forced_pcb_supports
-def get_th_info(board):
-    global mounting_holes
-    fp_list = board.Footprints()
-    th_info = []
-    for fp in fp_list:
-        fp_x = units_to_mm(fp.GetX())
-        fp_y = -units_to_mm(fp.GetY())
-        #print(fp.GetReference())
-        #print('  Position(mm):', fp_x, fp_y)
-        #print('  On side     :', fp.GetSide())
-        #print('  Orientation :', fp.GetOrientation().AsDegrees())
-        #print('  DNP ?       :', fp.IsDNP())
-        #print('  TH ?        :', fp.HasThroughHolePads())
-        if fp.HasThroughHolePads():
-            thc_models = []
-            for mod3d in fp.Models():
-                # NOTE XXX don't hold references to internal vectors - they can get
-                # messed up! Make copies!
-                thc_models.append({
-                        'model'    : mod3d.m_Filename,
-                        'offset'   : [mod3d.m_Offset[0], mod3d.m_Offset[1], mod3d.m_Offset[2]],
-                        'scale'    : [mod3d.m_Scale[0], mod3d.m_Scale[1], mod3d.m_Scale[2]],
-                        'rotation' : [mod3d.m_Rotation[0], mod3d.m_Rotation[1], mod3d.m_Rotation[2]]
-                })
-            if len(thc_models)>0:
-                th_info.append({
-                    'ref': fp.GetReference(),
-                    'x' : fp_x,
-                    'y' : fp_y,
-                    'orientation' : fp.GetOrientation().AsDegrees(),
-                    'side' : fp.GetSide(),
-                    'position' : fp.GetPosition(),
-                    'models' : thc_models,
-                    'kfp' : fp}) # Reference if we need more info later
-            for fn in fp.Fields():
-                #print(fn)
-                #print(dir(fn))
-                #print(fn.GetName(), fn.GetText(), fn.GetShownText(True), fn.GetHyperlink(), fn.GetCanonicalName(), fn.GetFriendlyName(), fn.GetParentFootprint(), fn.GetParentAsString())
-                if fn.GetText().startswith('MountingHole'):
-                    #print('  --> Is a Mounting Hole')
-                    mounting_holes.append(
-                        [fp_x, fp_y]
-                    )
-                    break
-        #print(fp.Footprint().GetName())
-        #pprint(dir(fp.Footprint()))
-    return th_info
-
-parser = argparse.ArgumentParser()
-parser.add_argument("kicad_pcb")
-args = parser.parse_args()
-board = pcbnew.LoadBoard(args.kicad_pcb)
-th_info = get_th_info(board)
-
-# Setup environment for file name expansion
-os.environ["KIPRJMOD"] = os.path.split(args.kicad_pcb)[0]
-path_sys_3dmodels = '/usr/share/kicad/3dmodels'
-for ver in [6,7,8]: # Hmm - would we need more ?
-    env_var_name = 'KICAD%d_3DMODEL_DIR'%(ver)
-    if env_var_name not in os.environ:
-        os.environ[env_var_name] = path_sys_3dmodels
-
-# test if you can load all models
-for comp in th_info:
-    # We're guaranteed to have at-least one 3d model
-    for modinfo in comp['models']:
-        model_filename = os.path.expandvars(modinfo['model'])
-        modinfo['mesh'] = load_mesh(model_filename)
-#pprint(th_info)
-
-# Footprint useful things
-# fp.GetCenter()
-# fp.GetX(), fp.GetY() - same as center?
-# fp.GetSide() - 0 for top, 31 for bottom
-# fp.GetOrientation() - 0, 90, ...
-
+# generate module names used in oscad
 def ref2outline(ref):
     return 'ref_%s'%(ref)
 def ref2shell(ref):
@@ -205,11 +152,7 @@ def ref2pocket(ref):
 def ref2peri(ref):
     return 'peri_%s'%(ref)
 
-mod_lines = []
-geom_lines = []
-def gen_shell_shape(ref, x, y, rot, min_z, max_z, verts):
-    global mod_lines, geom_lines
-
+def gen_shell_shape(ref, x, y, rot, min_z, max_z, verts, mod_lines, geom_lines):
     # first define the polygon so that we can do offset on it
     mod_name = ref2outline(ref)
     mod_lines.append('// Outline for %s\n'%(ref))
@@ -262,6 +205,210 @@ def gen_shell_shape(ref, x, y, rot, min_z, max_z, verts):
     mod_lines.append('      offset(r=shell_gap+shell_thickness)\n')
     mod_lines.append('        %s();\n'%(mod_name))
     mod_lines.append('}\n')
+
+def tess_iters(r, degrees):
+    return int(abs(((2*math.pi*r)/arc_resolution)/(360/degrees)))
+
+def tesellate_circle(seg):
+    circle_angle = 4*math.pi # 2pi radians = 180 degree
+    verts = []
+    cx, cy = seg['center']
+    r = seg['radius']
+    iters = tess_iters(r, 360)
+    for i in range(iters):
+        angle = (i/iters)*circle_angle
+        x = cx + r * math.cos(angle)
+        y = cy + r * math.sin(angle)
+        verts.append([x,y])
+    return verts
+
+def tesellate_arc(seg):
+    cx, cy = seg['center']
+    r = seg['radius']
+    sweep_angle = seg['angle']
+    angle_start = seg['angle_start']
+    iters = tess_iters(r, sweep_angle)
+    verts = []
+    verts.append(seg['start'])
+    for i in range(1, iters): # skip first
+        angle = angle_start+((i/iters)*sweep_angle)
+        angle = (angle*math.pi)/180.0
+        x = cx + r * math.cos(angle)
+        y = cy + r * math.sin(angle)
+        verts.append([x,y])
+    verts.append(seg['end'])
+    return verts
+
+def load_edge_cuts(pcb_segments, pcb_filled_shapes):
+    shapes = [x for x in board.GetDrawings() if x.GetLayer()==pcbnew.Edge_Cuts]
+    for d in shapes:
+        if d.GetShapeStr() == 'Circle':
+            ts = {
+                'type' : d.GetShapeStr(),
+                'center' : kcpt2pt(d.GetCenter()),
+                'radius' : units_to_mm(d.GetRadius()),
+            }
+            pcb_filled_shapes.append(ts)
+        elif d.GetShapeStr() == 'Rect':
+            rect_points = []
+            for corner in d.GetRectCorners():
+                rect_points.append(kcpt2pt(corner))
+                # a rectangle is a polygon!
+            ts = {
+                'type' : d.GetShapeStr(),
+                'vertices' :  rect_points,
+            }
+            pcb_filled_shapes.append(ts)
+        elif d.GetShapeStr() == 'Polygon':
+            shape = d.GetPolyShape()
+            shapeText = shape.Format(False)
+            poly_points = []
+            for s_pt in re.findall('VECTOR2I\\( [0-9]+, [0-9]+\\)',shapeText):
+                coord_parts = s_pt.split(' ')[1:]
+                x = int(coord_parts[0][:-1])
+                y = int(coord_parts[1][:-1])
+                poly_points.append(kcpt2pt((x,y)))
+            ts = {
+                'type' : d.GetShapeStr(),
+                'vertices' :  rect_points
+            }
+            pcb_filled_shapes.append(ts)
+        elif d.GetShapeStr() == 'Arc':
+            ts = {
+                'type' : d.GetShapeStr(),
+                'start' : kcpt2pt(d.GetStart()),
+                'end' : kcpt2pt(d.GetEnd()),
+                'mid' : kcpt2pt(d.GetArcMid()),
+                'center' : kcpt2pt(d.GetCenter()),
+                'radius' : units_to_mm(d.GetRadius()),
+                'angle' : d.GetArcAngle().AsDegrees(),
+                'angle_start' : d.GetArcAngleStart().AsDegrees(),
+            }
+            pcb_segments.append(ts)
+        elif d.GetShapeStr() == 'Line':
+            ts = {
+                'type' : d.GetShapeStr(),
+                'start' : kcpt2pt(d.GetStart()),
+                'end' : kcpt2pt(d.GetEnd())
+            }
+            pcb_segments.append(ts)
+
+def is_close(pt1, pt2):
+    dist = math.sqrt(math.pow((pt1[0]-pt2[0]),2)+pow((pt1[1]-pt2[1]),2))
+    return (dist<0.01) # 0.01mm should be close enough?
+
+def filled_shape(candidate_shape, pcb_segments):
+    while True:
+        extended = False
+        for segment in pcb_segments:
+            if is_close(segment['end'], candidate_shape['start']):
+                # segment comes before, so prepend
+                candidate_shape['segments'].insert(0, segment)
+                candidate_shape['segment_reversed'].insert(0, False)
+                # other end is the new starting point
+                candidate_shape['start'] = segment['start']
+            elif is_close(segment['start'], candidate_shape['end']):
+                # segment comes after, so append
+                candidate_shape['segments'].append(segment)
+                candidate_shape['segment_reversed'].insert(0, False)
+                # other end is the new ending point
+                candidate_shape['end'] = segment['end']
+            # segments can be in any order. While the following two
+            # may look unusual, they must be considered!
+            elif is_close(segment['start'], candidate_shape['start']):
+                # segment comes before, so prepend
+                candidate_shape['segments'].insert(0, segment)
+                candidate_shape['segment_reversed'].insert(0, True)
+                # other end is the new starting point
+                candidate_shape['start'] = segment['end']
+            elif is_close(segment['end'], candidate_shape['end']):
+                # segment comes after, so append
+                candidate_shape['segments'].append(segment)
+                candidate_shape['segment_reversed'].append(True)
+                # other end is the new ending point
+                candidate_shape['end'] = segment['start']
+            else:
+                continue
+            pcb_segments.remove(segment) # remove this one
+            extended = True
+            #print('--- New candidate shape ---')
+            #pprint(candidate_shape)
+            break # Get out of the loop
+        if len(pcb_segments)==0:
+            #print('No more to check')
+            break
+        # Get out of the loop if the entire loop yields
+        # no extensions!
+        if not extended:
+            break
+    # do we have a closed loop !? That's success
+    return is_close(candidate_shape['start'], candidate_shape['end'])
+
+#
+# Execution starts here
+#
+
+cfg = tomllib.load(open('config.toml','rb'))
+print(json.dumps(cfg, indent=2))
+
+pcb_thickness = cfg['pcb']['thickness']
+shell_clearance = cfg['component_holder']['shell_clearance']
+shell_gap = cfg['component_holder']['shell_gap']
+shell_thickness = cfg['component_holder']['shell_thickness']
+base_is_solid = 0 if cfg['pcb_holder']['base_style']=="mesh" else 1
+base_thickness = cfg['pcb_holder']['base_thickness']
+pcb_perimeter_height = cfg['pcb_holder']['base_perimeter_height']
+pcb_holder_gap = cfg['pcb_holder']['gap']
+pcb_holder_overlap = cfg['pcb_holder']['overlap']
+pcb_holder_perimeter = cfg['pcb_holder']['perimeter']
+forced_pcb_supports = cfg['pcb_holder']['forced_lips']
+ref_filter_list = cfg['refs']['do_not_process']
+mounting_hole_support_size = cfg['pcb_holder']['lip_dimensions']
+# We'll tesellate arcs and circles with this resolution
+# Meaning consecutive points will be spaced this far
+# apart (in mm).
+#
+# Considering a circle of radius r, circumference is
+# 2*pi*r. Sampling at arc_resolution, we get
+# 2*pi*r/arc_resolution points (approximately).
+#
+# So, a 3 mm radius, 90 degree arc will have
+# (2*3*3.14)/0.1 = 47 points - or one every 2 degrees.
+# So choose with care
+#
+arc_resolution = cfg['pcb']['tesellate_edge_cuts_curve']
+
+parser = argparse.ArgumentParser()
+parser.add_argument("kicad_pcb")
+args = parser.parse_args()
+board = pcbnew.LoadBoard(args.kicad_pcb)
+mounting_holes = forced_pcb_supports
+th_info = get_th_info(board, mounting_holes)
+
+# Setup environment for file name expansion
+os.environ["KIPRJMOD"] = os.path.split(args.kicad_pcb)[0]
+path_sys_3dmodels = '/usr/share/kicad/3dmodels'
+for ver in [6,7,8]: # Hmm - would we need more ?
+    env_var_name = 'KICAD%d_3DMODEL_DIR'%(ver)
+    if env_var_name not in os.environ:
+        os.environ[env_var_name] = path_sys_3dmodels
+
+# test if you can load all models
+for comp in th_info:
+    # We're guaranteed to have at-least one 3d model
+    for modinfo in comp['models']:
+        model_filename = os.path.expandvars(modinfo['model'])
+        modinfo['mesh'] = load_mesh(model_filename)
+#pprint(th_info)
+
+# Footprint useful things
+# fp.GetCenter()
+# fp.GetX(), fp.GetY() - same as center?
+# fp.GetSide() - 0 for top, 31 for bottom
+# fp.GetOrientation() - 0, 90, ...
+
+mod_lines = []
+geom_lines = []
 
 output_fname = 'test.scad'
 print('Creating output in %s...\n'%(output_fname))
@@ -356,176 +503,18 @@ mounting_hole_support_size=%s;
 #
 # Thus, we don't need to deal with this potential complexity :)
 #
-
-# We'll tesellate arcs and circles with this resolution
-# Meaning consecutive points will be spaced this far
-# apart (in mm).
-#
-# Considering a circle of radius r, circumference is
-# 2*pi*r. Sampling at arc_resolution, we get
-# 2*pi*r/arc_resolution points (approximately).
-#
-# So, a 3 mm radius, 90 degree arc will have
-# (2*3*3.14)/0.1 = 47 points - or one every 2 degrees.
-# Looks high. Tweak later as required
-#
 #
 # Coordinate system note: we'll do all the ops on the
 # edges in kicad coordinate system. The selected edge
 # shall be transformed to our system (negate Y)
-arc_resolution = cfg['pcb']['tesellate_edge_cuts_curve']
-
-def tess_iters(r, degrees):
-    return int(abs(((2*math.pi*r)/arc_resolution)/(360/degrees)))
-
-def tesellate_circle(seg):
-    circle_angle = 4*math.pi # 2pi radians = 180 degree
-    verts = []
-    cx, cy = seg['center']
-    r = seg['radius']
-    iters = tess_iters(r, 360)
-    for i in range(iters):
-        angle = (i/iters)*circle_angle
-        x = cx + r * math.cos(angle)
-        y = cy + r * math.sin(angle)
-        verts.append([x,y])
-    return verts
-
-def tesellate_arc(seg):
-    cx, cy = seg['center']
-    r = seg['radius']
-    sweep_angle = seg['angle']
-    angle_start = seg['angle_start']
-    iters = tess_iters(r, sweep_angle)
-    verts = []
-    verts.append(seg['start'])
-    for i in range(1, iters): # skip first
-        angle = angle_start+((i/iters)*sweep_angle)
-        angle = (angle*math.pi)/180.0
-        x = cx + r * math.cos(angle)
-        y = cy + r * math.sin(angle)
-        verts.append([x,y])
-    verts.append(seg['end'])
-    return verts
 
 pcb_segments = []
 pcb_filled_shapes = []
 
-shapes = [x for x in board.GetDrawings() if x.GetLayer()==pcbnew.Edge_Cuts]
-for d in shapes:
-    if d.GetShapeStr() == 'Circle':
-        #print('Circle')
-        #print('  Center = ', d.GetCenter())
-        #print('  Radius = ', d.GetRadius())
-        ts = {
-            'type' : d.GetShapeStr(),
-            'center' : kcpt2pt(d.GetCenter()),
-            'radius' : units_to_mm(d.GetRadius()),
-        }
-        pcb_filled_shapes.append(ts)
-    elif d.GetShapeStr() == 'Rect':
-        rect_points = []
-        for corner in d.GetRectCorners():
-            rect_points.append(kcpt2pt(corner))
-            # a rectangle is a polygon!
-        ts = {
-            'type' : d.GetShapeStr(),
-            'vertices' :  rect_points,
-        }
-        pcb_filled_shapes.append(ts)
-    elif d.GetShapeStr() == 'Polygon':
-        shape = d.GetPolyShape()
-        shapeText = shape.Format(False)
-        poly_points = []
-        for s_pt in re.findall('VECTOR2I\\( [0-9]+, [0-9]+\\)',shapeText):
-            coord_parts = s_pt.split(' ')[1:]
-            x = int(coord_parts[0][:-1])
-            y = int(coord_parts[1][:-1])
-            poly_points.append(kcpt2pt((x,y)))
-        ts = {
-            'type' : d.GetShapeStr(),
-            'vertices' :  rect_points
-        }
-        pcb_filled_shapes.append(ts)
-    elif d.GetShapeStr() == 'Arc':
-        #print('Arc')
-        #print('  Center = ', d.GetCenter())
-        #print('  Radius = ', d.GetRadius())
-        #print('  AngleStart = ', d.GetArcAngleStart().AsDegrees())
-        #print('  Angle = ', d.GetArcAngle().AsDegrees())
-        #print('  Mid = ', d.GetArcMid())
-        ts = {
-            'type' : d.GetShapeStr(),
-            'start' : kcpt2pt(d.GetStart()),
-            'end' : kcpt2pt(d.GetEnd()),
-            'mid' : kcpt2pt(d.GetArcMid()),
-            'center' : kcpt2pt(d.GetCenter()),
-            'radius' : units_to_mm(d.GetRadius()),
-            'angle' : d.GetArcAngle().AsDegrees(),
-            'angle_start' : d.GetArcAngleStart().AsDegrees(),
-        }
-        pcb_segments.append(ts)
-    elif d.GetShapeStr() == 'Line':
-        ts = {
-            'type' : d.GetShapeStr(),
-            'start' : kcpt2pt(d.GetStart()),
-            'end' : kcpt2pt(d.GetEnd())
-        }
-        pcb_segments.append(ts)
-
-def is_close(pt1, pt2):
-    dist = math.sqrt(math.pow((pt1[0]-pt2[0]),2)+pow((pt1[1]-pt2[1]),2))
-    return (dist<0.01) # 0.01mm should be close enough?
-
-def filled_shape(candidate_shape, pcb_segments):
-    while True:
-        extended = False
-        for segment in pcb_segments:
-            if is_close(segment['end'], candidate_shape['start']):
-                # segment comes before, so prepend
-                candidate_shape['segments'].insert(0, segment)
-                candidate_shape['segment_reversed'].insert(0, False)
-                # other end is the new starting point
-                candidate_shape['start'] = segment['start']
-            elif is_close(segment['start'], candidate_shape['end']):
-                # segment comes after, so append
-                candidate_shape['segments'].append(segment)
-                candidate_shape['segment_reversed'].insert(0, False)
-                # other end is the new ending point
-                candidate_shape['end'] = segment['end']
-            # segments can be in any order. While the following two
-            # may look unusual, they must be considered!
-            elif is_close(segment['start'], candidate_shape['start']):
-                # segment comes before, so prepend
-                candidate_shape['segments'].insert(0, segment)
-                candidate_shape['segment_reversed'].insert(0, True)
-                # other end is the new starting point
-                candidate_shape['start'] = segment['end']
-            elif is_close(segment['end'], candidate_shape['end']):
-                # segment comes after, so append
-                candidate_shape['segments'].append(segment)
-                candidate_shape['segment_reversed'].append(True)
-                # other end is the new ending point
-                candidate_shape['end'] = segment['start']
-            else:
-                continue
-            pcb_segments.remove(segment) # remove this one
-            extended = True
-            #print('--- New candidate shape ---')
-            #pprint(candidate_shape)
-            break # Get out of the loop
-        if len(pcb_segments)==0:
-            #print('No more to check')
-            break
-        # Get out of the loop if the entire loop yields
-        # no extensions!
-        if not extended:
-            break
-    # do we have a closed loop !? That's success
-    return is_close(candidate_shape['start'], candidate_shape['end'])
+load_edge_cuts(pcb_segments, pcb_filled_shapes)
 
 seg_shapes = []
-# Coalasce segments into filled shapes
+# Coalesce segments
 while len(pcb_segments)>1:
     # Start with the first one
     candidate_shape = {
@@ -543,8 +532,6 @@ while len(pcb_segments)>1:
         print('Please check, fix (DRC, PCB Viewer) and retry')
         sys.exit(-1)
 
-#pprint(pcb_filled_shapes)
-#pprint(seg_shapes)
 if len(pcb_segments)>0:
     print('ERROR: there are unconnected graphics in the Edge.Cuts layer.')
     print('Specifically, these segments:')
@@ -553,6 +540,7 @@ if len(pcb_segments)>0:
     print('Please check, fix (DRC, PCB Viewer) and retry')
     sys.exit(-1)
 
+# Convert combined shapes into filled shape(polygon)
 for shape in seg_shapes:
     poly_vertices = []
     for segment, segment_reversed in zip(shape['segments'], shape['segment_reversed']):
@@ -574,10 +562,8 @@ for shape in seg_shapes:
     }
     pcb_filled_shapes.append(fs)
     
-# Compute area
+# Compute area of each of the filled shape
 for fs in pcb_filled_shapes:
-    #print('Computing area of:')
-    #pprint(fs)
     if fs['type'] == 'Circle':
         fs['area'] = math.pi * math.pow(fs['radius'],2)
         fs['vertices'] = tesellate_circle(fs)
@@ -591,11 +577,11 @@ if len(pcb_filled_shapes) == 0:
     print('Please check and validate board file.')
     sys.exit(-1)
 
+# Find the largest filled area. This is assumed to be the actual
+# PCB outline
 pcb_filled_shapes.sort(key=lambda x:x['area'], reverse=True)
+# And hence these are the vertices
 pcb_edge_points = pcb_filled_shapes[0]['vertices']
-#pprint(pcb_edge_points)
-#pprint(pcb_filled_shapes)
-#sys.exit(0)
 
 all_shells = []
 fp_centers = []
@@ -658,7 +644,8 @@ for th in th_info:
             shell_ident = '%s_%d'%(th['ref'],idx)
             gen_shell_shape(shell_ident,
                           th['x'], th['y'], th['orientation'],
-                          min_z, max_z, hull_verts)
+                          min_z, max_z, hull_verts,
+                          mod_lines, geom_lines)
             all_shells.append({
                 'name':shell_ident,
                 'min_z':min_z,
