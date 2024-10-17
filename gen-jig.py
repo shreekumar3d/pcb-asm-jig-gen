@@ -20,9 +20,6 @@ import pcbnew
 import scipy.spatial
 from scipy.spatial.transform import Rotation
 
-# Local imports
-import tripy
-
 # Standard imports
 import tempfile
 import argparse
@@ -32,18 +29,15 @@ import functools
 from pprint import pprint
 import numpy as np
 import sys
-import math
 import tomllib
 import json
 
+# Local imports
+from jigcommon import *
+import edge_cuts
+
 mesh_cache = {}
 shell_protrude = 1 # shells will come above PCB by this much, so user can enable and see
-
-def units_to_mm(x):
-    return x/1000000
-
-def kcpt2pt(pt):
-    return [units_to_mm(pt[0]), units_to_mm(pt[1])]
 
 def get_th_info(board, mounting_holes):
     fp_list = board.Footprints()
@@ -206,144 +200,6 @@ def gen_shell_shape(ref, x, y, rot, min_z, max_z, verts, mod_lines, geom_lines):
     mod_lines.append('        %s();\n'%(mod_name))
     mod_lines.append('}\n')
 
-def tess_iters(r, degrees):
-    return int(abs(((2*math.pi*r)/arc_resolution)/(360/degrees)))
-
-def tesellate_circle(seg):
-    circle_angle = 4*math.pi # 2pi radians = 180 degree
-    verts = []
-    cx, cy = seg['center']
-    r = seg['radius']
-    iters = tess_iters(r, 360)
-    for i in range(iters):
-        angle = (i/iters)*circle_angle
-        x = cx + r * math.cos(angle)
-        y = cy + r * math.sin(angle)
-        verts.append([x,y])
-    return verts
-
-def tesellate_arc(seg):
-    cx, cy = seg['center']
-    r = seg['radius']
-    sweep_angle = seg['angle']
-    angle_start = seg['angle_start']
-    iters = tess_iters(r, sweep_angle)
-    verts = []
-    verts.append(seg['start'])
-    for i in range(1, iters): # skip first
-        angle = angle_start+((i/iters)*sweep_angle)
-        angle = (angle*math.pi)/180.0
-        x = cx + r * math.cos(angle)
-        y = cy + r * math.sin(angle)
-        verts.append([x,y])
-    verts.append(seg['end'])
-    return verts
-
-def load_edge_cuts(pcb_segments, pcb_filled_shapes):
-    shapes = [x for x in board.GetDrawings() if x.GetLayer()==pcbnew.Edge_Cuts]
-    for d in shapes:
-        if d.GetShapeStr() == 'Circle':
-            ts = {
-                'type' : d.GetShapeStr(),
-                'center' : kcpt2pt(d.GetCenter()),
-                'radius' : units_to_mm(d.GetRadius()),
-            }
-            pcb_filled_shapes.append(ts)
-        elif d.GetShapeStr() == 'Rect':
-            rect_points = []
-            for corner in d.GetRectCorners():
-                rect_points.append(kcpt2pt(corner))
-                # a rectangle is a polygon!
-            ts = {
-                'type' : d.GetShapeStr(),
-                'vertices' :  rect_points,
-            }
-            pcb_filled_shapes.append(ts)
-        elif d.GetShapeStr() == 'Polygon':
-            shape = d.GetPolyShape()
-            shapeText = shape.Format(False)
-            poly_points = []
-            for s_pt in re.findall('VECTOR2I\\( [0-9]+, [0-9]+\\)',shapeText):
-                coord_parts = s_pt.split(' ')[1:]
-                x = int(coord_parts[0][:-1])
-                y = int(coord_parts[1][:-1])
-                poly_points.append(kcpt2pt((x,y)))
-            ts = {
-                'type' : d.GetShapeStr(),
-                'vertices' :  rect_points
-            }
-            pcb_filled_shapes.append(ts)
-        elif d.GetShapeStr() == 'Arc':
-            ts = {
-                'type' : d.GetShapeStr(),
-                'start' : kcpt2pt(d.GetStart()),
-                'end' : kcpt2pt(d.GetEnd()),
-                'mid' : kcpt2pt(d.GetArcMid()),
-                'center' : kcpt2pt(d.GetCenter()),
-                'radius' : units_to_mm(d.GetRadius()),
-                'angle' : d.GetArcAngle().AsDegrees(),
-                'angle_start' : d.GetArcAngleStart().AsDegrees(),
-            }
-            pcb_segments.append(ts)
-        elif d.GetShapeStr() == 'Line':
-            ts = {
-                'type' : d.GetShapeStr(),
-                'start' : kcpt2pt(d.GetStart()),
-                'end' : kcpt2pt(d.GetEnd())
-            }
-            pcb_segments.append(ts)
-
-def is_close(pt1, pt2):
-    dist = math.sqrt(math.pow((pt1[0]-pt2[0]),2)+pow((pt1[1]-pt2[1]),2))
-    return (dist<0.01) # 0.01mm should be close enough?
-
-def filled_shape(candidate_shape, pcb_segments):
-    while True:
-        extended = False
-        for segment in pcb_segments:
-            if is_close(segment['end'], candidate_shape['start']):
-                # segment comes before, so prepend
-                candidate_shape['segments'].insert(0, segment)
-                candidate_shape['segment_reversed'].insert(0, False)
-                # other end is the new starting point
-                candidate_shape['start'] = segment['start']
-            elif is_close(segment['start'], candidate_shape['end']):
-                # segment comes after, so append
-                candidate_shape['segments'].append(segment)
-                candidate_shape['segment_reversed'].insert(0, False)
-                # other end is the new ending point
-                candidate_shape['end'] = segment['end']
-            # segments can be in any order. While the following two
-            # may look unusual, they must be considered!
-            elif is_close(segment['start'], candidate_shape['start']):
-                # segment comes before, so prepend
-                candidate_shape['segments'].insert(0, segment)
-                candidate_shape['segment_reversed'].insert(0, True)
-                # other end is the new starting point
-                candidate_shape['start'] = segment['end']
-            elif is_close(segment['end'], candidate_shape['end']):
-                # segment comes after, so append
-                candidate_shape['segments'].append(segment)
-                candidate_shape['segment_reversed'].append(True)
-                # other end is the new ending point
-                candidate_shape['end'] = segment['start']
-            else:
-                continue
-            pcb_segments.remove(segment) # remove this one
-            extended = True
-            #print('--- New candidate shape ---')
-            #pprint(candidate_shape)
-            break # Get out of the loop
-        if len(pcb_segments)==0:
-            #print('No more to check')
-            break
-        # Get out of the loop if the entire loop yields
-        # no extensions!
-        if not extended:
-            break
-    # do we have a closed loop !? That's success
-    return is_close(candidate_shape['start'], candidate_shape['end'])
-
 #
 # Execution starts here
 #
@@ -470,107 +326,22 @@ mounting_hole_support_size=%s;
 '''%(shell_gap, shell_thickness, pcb_thickness, shell_clearance,
      shell_protrude, base_thickness, base_is_solid,
      mounting_hole_support_size))
-# Process the PCB edge
-#
-# KiCAD has an Edge Cuts layer. Drawings on this layer define
-# the PCB edges.
-#
-# KiCAD supports filled primitives (Rectangle, Circle and Polygon)
-# as well as 2d segment shapes - Line and Arc
-#
-# Filled primitives may not intersect each other at the edges - that
-# is treated as an error (easy to verify in 3D viewer)
-#
-# Lines and Arcs need to connect with each other at the edges to
-# create a valid filled area.
-#
-# Holes are allowed - so you may have a round PCB with say a pacman
-# shaped hole ! Or a pacman shaped PCB with pacman shaped holes.
-#
-# For simplicity, in this code, we don't "validate" the data we
-# get - we expect that the board file has a valid shape.
-#
-# While we can use filled shapes directly as is.  However, we need
-# to process the segments to build filled shapes out of them.
-#
-# After everything is done, we can find the filled shape with the
-# largest area, and use that as the board edge.
-#
-# KiCAD doesn't disallow multiple non-overlapping board edges.
-# (is this a bug or caught in DRC?)
-# I don't know if people things this way at all - even
-# panelized PCBs are still a single piece !
-#
-# Thus, we don't need to deal with this potential complexity :)
-#
-#
-# Coordinate system note: we'll do all the ops on the
-# edges in kicad coordinate system. The selected edge
-# shall be transformed to our system (negate Y)
 
 pcb_segments = []
 pcb_filled_shapes = []
+seg_shapes = []
 
-load_edge_cuts(pcb_segments, pcb_filled_shapes)
+edge_cuts.load(board, pcb_segments, pcb_filled_shapes)
 
 seg_shapes = []
-# Coalesce segments
-while len(pcb_segments)>1:
-    # Start with the first one
-    candidate_shape = {
-        'start' : pcb_segments[0]['start'],
-        'end' : pcb_segments[0]['end'],
-        'segments' : [ pcb_segments[0] ],
-        'segment_reversed' : [ False ]
-    }
-    pcb_segments.pop(0)
-    if filled_shape(candidate_shape, pcb_segments):
-        seg_shapes.append(candidate_shape)
-    else:
-        print('ERROR: Some unfilled shapes are in the Edge.Cuts layer')
-        print('ERROR: Unable to validate correctness of PCB edge');
-        print('Please check, fix (DRC, PCB Viewer) and retry')
-        sys.exit(-1)
-
-if len(pcb_segments)>0:
-    print('ERROR: there are unconnected graphics in the Edge.Cuts layer.')
-    print('Specifically, these segments:')
-    pprint(pcb_segments)
-    print('ERROR: Unable to validate correctness of PCB edge');
-    print('Please check, fix (DRC, PCB Viewer) and retry')
+if not edge_cuts.coalesce_segments(pcb_segments, seg_shapes):
+    print('ERROR: Please check the edge cuts layer in KiCAD.')
+    print('ERROR: There are incomplete outlines. DRC or 3D View should help')
+    print('ERROR: diagnose the issue')
     sys.exit(-1)
 
-# Convert combined shapes into filled shape(polygon)
-for shape in seg_shapes:
-    poly_vertices = []
-    for segment, segment_reversed in zip(shape['segments'], shape['segment_reversed']):
-        if segment['type'] == 'Arc':
-            verts = tesellate_arc(segment)
-            if segment_reversed:
-                verts.reverse()
-        else:
-            if segment_reversed:
-                verts = [segment['end'], segment['start']]
-            else:
-                verts = [segment['start'], segment['end']]
-        # skip last one of current, it will be same as first
-        # of next
-        poly_vertices = poly_vertices[:-1] + verts
-    fs = {
-        'type' : 'Polygon',
-        'vertices' :  poly_vertices[:-1] # skip last one, it's same as first
-    }
-    pcb_filled_shapes.append(fs)
-    
-# Compute area of each of the filled shape
-for fs in pcb_filled_shapes:
-    if fs['type'] == 'Circle':
-        fs['area'] = math.pi * math.pow(fs['radius'],2)
-        fs['vertices'] = tesellate_circle(fs)
-    else:
-        # It's a polygon or rectangle
-        tris = tripy.earclip(fs['vertices'])
-        fs['area'] = tripy.calculate_total_area(tris)
+edge_cuts.tesellate(arc_resolution, seg_shapes, pcb_filled_shapes)
+edge_cuts.compute_areas(pcb_filled_shapes)
 
 if len(pcb_filled_shapes) == 0:
     print('ERROR: At-least one filled shape is needed in Edge.Cuts layer')
@@ -687,8 +458,8 @@ fp_scad.write('\n')
 # Write out the PCB edge
 pcb_edge_points = np.array(pcb_edge_points)
 pcb_edge_points[:,1] *= -1.0 # Negate all Ys to fix coordinate system
-hull = scipy.spatial.ConvexHull(pcb_edge_points)
-pcb_edge_hull = pcb_edge_points[hull.vertices]
+#hull = scipy.spatial.ConvexHull(pcb_edge_points)
+#pcb_edge_hull = pcb_edge_points[hull.vertices]
 fp_scad.write('module pcb_edge() {\n')
 fp_scad.write('  polygon(\n')
 fp_scad.write('    points=[\n')
@@ -697,6 +468,13 @@ for v in pcb_edge_points:
 fp_scad.write('    ]\n')
 fp_scad.write('  );\n')
 fp_scad.write('}\n')
+
+# Uncomment to see PCB edge as a 2D diagram :)
+#from matplotlib import pyplot as plt
+#x, y = pcb_edge_points.T
+#plt.scatter(x1,y)
+#plt.plot(x1,y1)
+#plt.show()
 
 fp_scad.write(''.join(mod_lines))
 fp_scad.write(''.join(geom_lines))
