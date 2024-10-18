@@ -236,7 +236,7 @@ arc_resolution = cfg['pcb']['tesellate_edge_cuts_curve']
 jig_style = cfg['jig_options']['style']
 jig_style_range = ['soldering_helper', 'component_shell']
 if jig_style not in jig_style_range:
-    print('BAD value "%s" for jig_options/style. Valid values are : ' %
+    print('BAD value "%s" for jig_options/style. Valid values are : %s' %
         (jig_style,','.join(jig_style_range)))
     sys.exit(-1)
 jig_style_soldering_helper = (jig_style == 'soldering_helper')
@@ -244,9 +244,8 @@ jig_style_component_shell = (jig_style == 'component_shell')
 
 if jig_style_component_shell:
     if shell_clearance>0:
-        print('INFO: Generating component shells, shell_clearance=%s will be ignored.'
+        print('INFO: Generating component shells, note shell_clearance=%s will cut into shell.'
             %(shell_clearance))
-        shell_clearance = 0
 
 board = pcbnew.LoadBoard(args.kicad_pcb)
 mounting_holes = forced_pcb_supports
