@@ -344,7 +344,7 @@ def compute_lips(arc_resolution, filled_shape, lip_size):
     elif fs['type'] in ['Rect', 'Polygon']:
         # add first one to end to make loop easier
         verts = fs['vertices'] + [fs['vertices'][0]]
-        pprint(verts)
+        #pprint(verts)
         for i in range(len(verts)-1):
             a = verts[i]
             b = verts[i+1]
