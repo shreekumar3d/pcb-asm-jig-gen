@@ -93,8 +93,8 @@ line_width = 2.0
 # consider a thin base with lines providing extra structural strength
 line_height = 1.0
 
-[refs]
-# Generic properties around component refs.
+[TH_refs]
+# Generic properties around through hole componet refs.
 do_not_process = [
   # list of refs that we should ignore
 ]
@@ -104,21 +104,22 @@ process_only_these = [
   # this is exclusive with do_not_process
 ]
 
-[component_shell]
+[TH_component_shell]
 # Around each through hole component (ref), the jig generator creates a "shell"
 # that serves as a component holder at its exact location on the board.
 
 # shell can have one of a few styles
-# - outline => outline of the external shape
-#              (convex hull). Component has a bit of
-#              a wiggle room
-# - fitting => multiple outlines, like a step-well
-#              each level helps hold the component
-#              in place, and also reduces wiggle room
-# - tight   => step-well of concave hulls.
+# - wiggle =>  A shape that gives a bit of wiggle room for the component,
+#              when inserted into the shell. Depending on the exact shape of
+#              the component, it may be possible to rock/shake the component
+#              around.
+# - fitting => multiple outlines, like a "step well". Each level helps hold
+#              the component in place, thus reducing wiggle room
+# - tight   => step-well of concave hulls. Provides the tightest fit, but
+#              also requires the most accuracy in dimensions and printing
 #
 # "fitting" and "tight" are not implemented yet.
-type = "outline"
+type = "wiggle"
 
 # component will typically be inserted from the top side (w.r.t # the PCB, and
 # the jig). However, they can also be inserted from the bottom of the jig.

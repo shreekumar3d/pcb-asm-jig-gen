@@ -192,9 +192,16 @@ else:
     cfg = tomllib.loads(config_text)
 
 pcb_thickness = cfg['pcb']['thickness']
-shell_clearance = cfg['component_shell']['clearance_from_pcb']
-shell_gap = cfg['component_shell']['gap']
-shell_thickness = cfg['component_shell']['thickness']
+shell_clearance = cfg['TH_component_shell']['clearance_from_pcb']
+shell_type = cfg['TH_component_shell']['type']
+if shell_type not in ['wiggle', 'fitting', 'tight']:
+    print('ERROR: invalid value of shell_type %s'%(shell_type))
+    sys.exit(-1)
+if shell_type in ['fitting', 'tight']:
+    print(f"ERROR: shell_type='{shell_type}' is not implemented yet.")
+    sys.exit(-1)
+shell_gap = cfg['TH_component_shell']['gap']
+shell_thickness = cfg['TH_component_shell']['thickness']
 base_is_solid = 0 if cfg['holder']['base']['type']=="mesh" else 1
 
 base_thickness = cfg['holder']['base']['thickness']
@@ -208,8 +215,8 @@ pcb_holder_overlap = cfg['holder']['pcb_overlap']
 pcb_holder_perimeter = cfg['holder']['perimeter']
 forced_pcb_supports = cfg['holder']['forced_lips']
 lip_size = cfg['holder']['lip_size']
-ref_do_not_process = cfg['refs']['do_not_process']
-ref_process_only_these = cfg['refs']['process_only_these']
+ref_do_not_process = cfg['TH_refs']['do_not_process']
+ref_process_only_these = cfg['TH_refs']['process_only_these']
 jig_style = cfg['jig']['type']
 jig_style_range = ['th_soldering', 'component_fitting']
 if jig_style not in jig_style_range:
