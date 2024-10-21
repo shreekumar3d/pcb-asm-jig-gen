@@ -201,6 +201,7 @@ base_thickness = cfg['holder']['base']['thickness']
 arc_resolution = cfg['pcb']['tesellate_edge_cuts_curve']
 
 mesh_line_width = cfg['holder']['base']['mesh']['line_width']
+mesh_line_height = cfg['holder']['base']['mesh']['line_height']
 pcb_perimeter_height = cfg['holder']['base']['perimeter_height']
 pcb_holder_gap = cfg['holder']['pcb_gap']
 pcb_holder_overlap = cfg['holder']['pcb_overlap']
@@ -315,6 +316,9 @@ base_thickness = %s;
 // Line width in the mesh
 mesh_line_width = %s;
 
+// Line height in the mesh
+mesh_line_height = %s;
+
 // By default, we generate a base with a delaunay
 // frame holding the shells together.
 //
@@ -331,8 +335,8 @@ base_is_solid = %s;
 lip_size=%s;
 
 '''%(shell_gap, shell_thickness, pcb_thickness, shell_clearance,
-     shell_protrude, base_thickness, mesh_line_width, base_is_solid,
-     lip_size))
+     shell_protrude, base_thickness, mesh_line_width, mesh_line_height,
+     base_is_solid, lip_size))
 
 pcb_segments = []
 pcb_filled_shapes = []
@@ -452,6 +456,8 @@ topmost_z=%s;
 lip_width = max(pcb_gap+pcb_holder_perimeter, pcb_overlap)*1.2;
 tiny_dimension = 0.001;
 base_z =  pcb_thickness+topmost_z+base_thickness+2*tiny_dimension;
+
+mesh_start_z = pcb_thickness+topmost_z+base_thickness-mesh_line_height;
 '''%(pcb_holder_gap, pcb_holder_overlap, pcb_holder_perimeter, pcb_perimeter_height, topmost_z))
 
 fp_scad.write('// Height of the individual components\n')
@@ -515,11 +521,13 @@ pcb_bb_corners = [
 
 sv_base_thickness = ScadValue('base_thickness')
 sv_mesh_line_width = ScadValue('mesh_line_width')
+sv_mesh_line_height = ScadValue('mesh_line_height')
+sv_mesh_start_z = ScadValue('mesh_start_z')
 @exportReturnValueAsModule
 def wide_line(start, end):
     return solid2.hull()(
-            translate(start)(cylinder(sv_base_thickness, sv_mesh_line_width))+
-            translate(end)(cylinder(sv_base_thickness, sv_mesh_line_width))
+            translate(start)(cylinder(h=sv_mesh_line_height, d=sv_mesh_line_width))+
+            translate(end)(cylinder(h=sv_mesh_line_height, d=sv_mesh_line_width))
             )
 # Delaunay triangulation will be done on the following points
 if jig_style_th_soldering:
@@ -540,8 +548,8 @@ sv_pcb_gap = ScadValue('pcb_gap')
 sv_pcb_overlap = ScadValue('pcb_overlap')
 sv_pcb_perimeter_height = ScadValue('pcb_perimeter_height')
 base_solid = translate([0,0,sv_pcb_thickness+sv_topmost_z])(
-                offset(sv_pcb_holder_perimeter+sv_pcb_gap)(
-                    linear_extrude(sv_base_thickness) (
+                linear_extrude(sv_base_thickness) (
+                    offset(sv_pcb_holder_perimeter+sv_pcb_gap)(
                         sm_pcb_edge()
                     )
                 )
@@ -577,12 +585,12 @@ else:
         mesh_lines += wide_line(b,c)
         mesh_lines += wide_line(c,a)
 
-base_mesh_volume = linear_extrude(sv_base_thickness) (
+base_mesh_volume = linear_extrude(sv_mesh_line_height) (
                        offset(sv_pcb_holder_perimeter+sv_pcb_gap) (
                            sm_pcb_edge()
                        )
                    )
-base_mesh = translate([0,0,sv_pcb_thickness+sv_topmost_z]) (
+base_mesh = translate([0,0,sv_mesh_start_z]) (
                 intersection() (
                     mesh_lines,
                     base_mesh_volume

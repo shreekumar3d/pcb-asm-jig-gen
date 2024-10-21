@@ -88,6 +88,11 @@ perimeter_height = 2
 # more material and increase printing time.
 line_width = 2.0
 
+# Height of the lines. If the base is solid, and height > thickness of the
+# base, then they will protrude above the base.  In many cases, you can
+# consider a thin base with lines providing extra structural strength
+line_height = 1.0
+
 [refs]
 # Generic properties around component refs.
 do_not_process = [
