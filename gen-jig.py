@@ -19,6 +19,8 @@ import tinyobjloader
 import pcbnew
 import scipy.spatial
 from scipy.spatial.transform import Rotation
+from solid2 import * # SolidPython
+import solid2
 
 # Standard imports
 import argparse
@@ -36,6 +38,7 @@ import tempfile
 from jigcommon import *
 import edge_cuts
 import mesh_ops
+from solid2_module import module, exportReturnValueAsModule
 
 shell_protrude = 1 # shells will come above PCB by this much, so user can enable and see
 
@@ -136,59 +139,62 @@ def ref2pocket(ref):
 def ref2peri(ref):
     return 'peri_%s'%(ref)
 
+mod_map = {}
+shell_map = {}
+pocket_map = {}
+perimeter_map = {}
+
+# sv => scad value
+sv_max_z = {}
+sv_shell_clearance = ScadValue('shell_clearance');
+sv_shell_thickness = ScadValue('shell_thickness');
+sv_shell_gap = ScadValue('shell_gap');
+sv_pcb_thickness = ScadValue('pcb_thickness');
+sv_shell_protrude = ScadValue('shell_protrude');
+
 def gen_shell_shape(ref, x, y, rot, min_z, max_z, verts, mod_lines, geom_lines):
+    sv_max_z[ref] = ScadValue('max_z_%s'%(ref))
     # first define the polygon so that we can do offset on it
     mod_name = ref2outline(ref)
-    mod_lines.append('// Outline for %s\n'%(ref))
-    mod_lines.append('module %s() {\n'%(mod_name))
-    mod_lines.append('  polygon(\n')
-    mod_lines.append('    points=[\n')
-
-    for v in verts:
-        mod_lines.append('      [%f,%f],\n'%(v[0],v[1]))
-    mod_lines.append('    ]\n')
-    mod_lines.append('  );\n')
-    mod_lines.append('}\n')
+    mod_map[ref] = module(mod_name, polygon(verts))
     #
     # note: max_z is positive - so this lifts
     #if rot==90 or rot==-90: # Invert 90 and -90
     #    rot=-rot
     shell_name = ref2shell(ref)
-    geom_lines.append('// Shell for %s\n'%(ref))
-    geom_lines.append('module %s() {\n'%(shell_name))
-    geom_lines.append('  translate([%f,%f,shell_clearance])\n'%(x,y))
-    #geom_lines.append('    rotate([0,0,%f])\n'%(rot))
     # note linear extrude is only "max_z". Assumes top
     # side of the board. "min_z" is the extent from the top
     # side of the board all the way to the end of the pin
     # on the other side of the bottom.
-    geom_lines.append('      linear_extrude(max_z_%s-shell_clearance)\n'%(ref))
-    geom_lines.append('        difference() {\n')
-    geom_lines.append('          offset(r=shell_gap+shell_thickness)\n')
-    geom_lines.append('            %s();\n'%(mod_name))
-    geom_lines.append('          offset(shell_gap)\n')
-    geom_lines.append('            %s();\n'%(mod_name))
-    geom_lines.append('        }\n')
-    geom_lines.append('}\n')
+    shell = translate([x,y,sv_shell_clearance]) (
+                linear_extrude(sv_max_z[ref]-sv_shell_clearance) (
+                    offset(sv_shell_gap+sv_shell_thickness) (
+                        mod_map[ref]()
+                    ) - offset(sv_shell_gap) (
+                        mod_map[ref]()
+                    )
+                )
+            )
+    shell_map[ref] = module(shell_name, shell)
 
-    shell_name = ref2pocket(ref)
-    geom_lines.append('// Pocket for %s\n'%(ref))
-    geom_lines.append('module %s() {\n'%(shell_name))
-    geom_lines.append('  translate([%f,%f,-shell_protrude])\n'%(x,y))
-    #geom_lines.append('    rotate([0,0,%f])\n'%(rot))
-    geom_lines.append('      linear_extrude(shell_protrude+pcb_thickness+max_z_%s)\n'%(ref))
-    geom_lines.append('        offset(shell_gap)\n')
-    geom_lines.append('          %s();\n'%(mod_name))
-    geom_lines.append('}\n')
+    pocket_name = ref2pocket(ref)
+    pocket = translate([x,y,-sv_shell_protrude])(
+                linear_extrude(sv_shell_protrude+sv_pcb_thickness+sv_max_z[ref]) (
+                    offset(sv_shell_gap) (
+                        mod_map[ref]()
+                    )
+                )
+             )
+    pocket_map[ref] = module(pocket_name, pocket)
 
-    peri_name = ref2peri(ref)
-    mod_lines.append('// Perimeter for %s\n'%(ref))
-    mod_lines.append('module %s() {\n'%(peri_name))
-    mod_lines.append('  translate([%f,%f,pcb_thickness+max_z_%s])\n'%(x,y, ref))
-    #mod_lines.append('    rotate([0,0,%f])\n'%(rot))
-    mod_lines.append('      offset(r=shell_gap+shell_thickness)\n')
-    mod_lines.append('        %s();\n'%(mod_name))
-    mod_lines.append('}\n')
+    perimeter_name = ref2peri(ref)
+    perimeter_solid = translate([x,y,sv_pcb_thickness+sv_max_z[ref]]) (
+                     offset(sv_shell_gap+sv_shell_thickness) (
+                         mod_map[ref]()
+                     )
+                 )
+    perimeter_map[ref] = module(perimeter_name, perimeter_solid,
+                           comment=f"Perimeter for {ref}")
 
 #
 # Execution starts here
@@ -353,6 +359,7 @@ base_is_solid = %s;
 // Lips that lie in a square of this size (in mm)
 // will be part of the model.
 lip_size=%s;
+
 '''%(shell_gap, shell_thickness, pcb_thickness, shell_clearance,
      shell_protrude, base_thickness, mesh_line_width, base_is_solid,
      lip_size))
@@ -471,6 +478,10 @@ pcb_perimeter_height = %s;
 
 // Height of the tallest component on the top side
 topmost_z=%s;
+
+lip_width = max(pcb_gap+pcb_holder_perimeter, pcb_overlap)*1.2;
+tiny_dimension = 0.001;
+base_z =  pcb_thickness+topmost_z+base_thickness+2*tiny_dimension;
 '''%(pcb_holder_gap, pcb_holder_overlap, pcb_holder_perimeter, pcb_perimeter_height, topmost_z))
 
 fp_scad.write('// Height of the individual components\n')
@@ -484,14 +495,7 @@ pcb_edge_points = np.array(pcb_edge_points)
 pcb_edge_points[:,1] *= -1.0 # Negate all Ys to fix coordinate system
 #hull = scipy.spatial.ConvexHull(pcb_edge_points)
 #pcb_edge_hull = pcb_edge_points[hull.vertices]
-fp_scad.write('module pcb_edge() {\n')
-fp_scad.write('  polygon(\n')
-fp_scad.write('    points=[\n')
-for v in pcb_edge_points:
-    fp_scad.write('      [%f,%f],\n'%(v[0],v[1]))
-fp_scad.write('    ]\n')
-fp_scad.write('  );\n')
-fp_scad.write('}\n')
+sm_pcb_edge = module('pcb_edge', polygon(pcb_edge_points))
 
 # Uncomment to see PCB edge as a 2D diagram :)
 #from matplotlib import pyplot as plt
@@ -503,25 +507,24 @@ fp_scad.write('}\n')
 fp_scad.write(''.join(mod_lines))
 fp_scad.write(''.join(geom_lines))
 # This module will include all shells
-fp_scad.write('''
-module mounted_component_shells() {
-  translate([0,0,pcb_thickness])
-    union() {
-''')
+combined_shell = union()
 for shell_info in all_shells:
-    fp_scad.write('      %s();\n'%(ref2shell(shell_info['name'])))
-fp_scad.write('''
-    }
-}
-''')
+    combined_shell += shell_map[shell_info['name']]()
+
+sm_mounted_component_shells = module('mounted_component_shells',
+        translate([0,0,sv_pcb_thickness]) (
+            combined_shell
+        )
+    )
+
 # This module will include all pockets
-fp_scad.write('module mounted_component_pockets() {\n')
-fp_scad.write('  union() { \n')
+combined_pockets = union()
 for shell_info in all_shells:
-    fp_scad.write('    %s();\n'%(ref2pocket(shell_info['name'])))
-fp_scad.write('  }\n')
-fp_scad.write('}\n')
-fp_scad.write('\n')
+    combined_pockets += pocket_map[shell_info['name']]()
+
+sm_mounted_component_pockets = module('mounted_component_pockets',
+        combined_pockets
+    )
 
 # Compute bounding box of PCB
 # FIXME: make this min, max code less verbose
@@ -540,14 +543,14 @@ pcb_bb_corners = [
     [pcb_max_x , pcb_max_y]
 ]
 
-fp_scad.write('''
-module wide_line(start, end) {
-    hull() {
-        translate(start) cylinder(h=base_thickness, d=mesh_line_width);
-        translate(end) cylinder(h=base_thickness, d=mesh_line_width);
-    }
-}\n\n''')
-
+sv_base_thickness = ScadValue('base_thickness')
+sv_mesh_line_width = ScadValue('mesh_line_width')
+@exportReturnValueAsModule
+def wide_line(start, end):
+    return solid2.hull()(
+            translate(start)(cylinder(sv_base_thickness, sv_mesh_line_width))+
+            translate(end)(cylinder(sv_base_thickness, sv_mesh_line_width))
+            )
 # Delaunay triangulation will be done on the following points
 if jig_style_soldering_helper:
     # 1. centers of all considered footprints
@@ -561,142 +564,160 @@ else:
     # it's enough to link footprint centers
     dt_centers = fp_centers
 
-fp_scad.write('''
-module base_solid() {
-  translate([0,0,pcb_thickness+topmost_z]) {
-    linear_extrude(base_thickness) {
-      offset(r=pcb_holder_perimeter+pcb_gap) pcb_edge();
-    }
-  }
-};
-''')
+sv_topmost_z = ScadValue('topmost_z')
+sv_pcb_holder_perimeter = ScadValue('pcb_holder_perimeter')
+sv_pcb_gap = ScadValue('pcb_gap')
+sv_pcb_overlap = ScadValue('pcb_overlap')
+sv_pcb_perimeter_height = ScadValue('pcb_perimeter_height')
+base_solid = translate([0,0,sv_pcb_thickness+sv_topmost_z])(
+                offset(sv_pcb_holder_perimeter+sv_pcb_gap)(
+                    linear_extrude(sv_base_thickness) (
+                        sm_pcb_edge()
+                    )
+                )
+             )
+sm_base_solid = module('base_solid', base_solid)
 
-fp_scad.write('module base_mesh() {\n')
-fp_scad.write('  translate([0,0,pcb_thickness+topmost_z])\n')
-fp_scad.write('  intersection() { \n')
-fp_scad.write('    union(){ \n')
+mesh_lines = union()
 if len(dt_centers)>=4:
-    fp_scad.write('        // delunay triangulated mesh\n')
+    mesh_comment = 'delaunay triangulated mesh'
     d_verts = np.array(dt_centers)
     d_tris = scipy.spatial.Delaunay(d_verts)
     for tri in d_tris.simplices:
         # tri is a,b,c
         av = d_verts[tri[0]]
-        a = '[%s,%s]'%(av[0],av[1])
+        a = [av[0], av[1]]
         bv = d_verts[tri[1]]
-        b = '[%s,%s]'%(bv[0],bv[1])
+        b = [bv[0], bv[1]]
         cv = d_verts[tri[2]]
-        c = '[%s,%s]'%(cv[0],cv[1])
-        fp_scad.write('      wide_line(%s,%s);\n'%(a,b))
-        fp_scad.write('      wide_line(%s,%s);\n'%(b,c))
-        fp_scad.write('      wide_line(%s,%s);\n'%(c,a))
+        c = [cv[0], cv[1]]
+        mesh_lines += wide_line(a,b)
+        mesh_lines += wide_line(b,c)
+        mesh_lines += wide_line(c,a)
 else:
     if len(dt_centers)>1:
         av = dt_centers[0]
-        a = '[%s,%s]'%(av[0],av[1])
+        a = [av[0],av[1]]
         bv = dt_centers[1]
-        b = '[%s,%s]'%(bv[0],bv[1])
-        fp_scad.write('      wide_line(%s,%s);\n'%(a,b))
+        b = [bv[0],bv[1]]
+        mesh_lines += wide_line(a,b)
     if len(dt_centers)==3:
         cv = dt_centers[2]
-        c = '[%s,%s]'%(cv[0],cv[1])
-        fp_scad.write('      wide_line(%s,%s);\n'%(b,c))
-        fp_scad.write('      wide_line(%s,%s);\n'%(c,a))
+        c = [cv[0],cv[1]]
+        mesh_lines += wide_line(b,c)
+        mesh_lines += wide_line(c,a)
 
-fp_scad.write('    }\n')
-fp_scad.write('''
-    // ensure no peri lines go out of frame
-    // tall shell supports must be included though
-    linear_extrude(base_thickness)
-      offset(r=pcb_holder_perimeter+pcb_gap)
-        pcb_edge();
-    }
-}
-''')
+base_mesh_volume = linear_extrude(sv_base_thickness) (
+                       offset(sv_pcb_holder_perimeter+sv_pcb_gap) (
+                           sm_pcb_edge()
+                       )
+                   )
+base_mesh = translate([0,0,sv_pcb_thickness+sv_topmost_z]) (
+                intersection() (
+                    mesh_lines,
+                    base_mesh_volume
+                )
+            )
 
-fp_scad.write('module component_shell_support() {\n')
-fp_scad.write('  translate([0,0,pcb_thickness+topmost_z]) {\n')
-fp_scad.write('    union() {\n')
+sm_base_mesh = module('base_mesh', base_mesh())
+
+support_component_shells = union()
 for shell_info in all_shells:
+    this_ref = shell_info['name']
     # if this component is less taller than the tallest component
     # then the extra must be filled up
     extra_extrude = topmost_z - shell_info['max_z']
     if extra_extrude>0:
-        fp_scad.write('      translate([0,0,max_z_%s-topmost_z])\n'%(shell_info['name']))
-        fp_scad.write('        linear_extrude(base_thickness+topmost_z-max_z_%s)\n'%(shell_info['name']))
-        fp_scad.write('          %s();\n'% (ref2peri(shell_info['name'])))
+        support_component_shells += translate([0,0,sv_max_z[this_ref]-sv_topmost_z]) (
+                linear_extrude(sv_base_thickness+sv_topmost_z-sv_max_z[this_ref]) (
+                    perimeter_map[this_ref]()
+                )
+            )
     else:
-        fp_scad.write('      linear_extrude(base_thickness)\n')
-        fp_scad.write('        %s();\n'% (ref2peri(shell_info['name'])))
-fp_scad.write('    }\n')
-fp_scad.write('  }\n')
-fp_scad.write('}\n')
+        # we only need a solid as thick as the base to hold the
+        # component from falling down :)
+        support_component_shells += linear_extrude(sv_base_thickness) (
+                perimeter_map[this_ref]()
+            )
 
-if jig_style_soldering_helper:
-    fp_scad.write('''
-module pcb_holder() {
-  // solid between perimeter & outline
-  // full height
-  linear_extrude(topmost_z+pcb_thickness+base_thickness) {
-    difference() {
-      offset(r=pcb_holder_perimeter+pcb_gap) pcb_edge();
-      offset(r=pcb_gap) pcb_edge();
-    }
-  }
+component_shell_support = translate([0,0,sv_pcb_thickness+sv_topmost_z]) (
+        support_component_shells
+    )
 
-  // solid between outline & overlap
-  // PCB sits here, so that much lower height than
-  // the full height
-  translate([0,0,pcb_thickness]) {
-    linear_extrude(topmost_z+base_thickness) {
-      difference() {
-        offset(r=pcb_gap) pcb_edge();
-        offset(r=-pcb_overlap) pcb_edge();
-      }
-    }
-  }
+sm_component_shell_support = module('component_shell_support', component_shell_support)
 
-}
+pcb_holder = linear_extrude(sv_topmost_z+sv_pcb_thickness+sv_base_thickness) (
+        difference()(
+            offset(sv_pcb_holder_perimeter+sv_pcb_gap)(
+                sm_pcb_edge()
+            ),
+            offset(sv_pcb_gap) (
+                sm_pcb_edge()
+            )
+        )
+    ) + translate([0,0,sv_pcb_thickness]) (
+        linear_extrude(sv_topmost_z+sv_base_thickness) (
+            difference() (
+                offset(sv_pcb_gap)(
+                    sm_pcb_edge()
+                ),
+                offset(-sv_pcb_overlap)(
+                    sm_pcb_edge()
+                )
+            )
+        )
+    )
+sm_pcb_holder = module('pcb_holder', pcb_holder,
+        comment = 'solid between perimeter and outline, full height')
 
-module pcb_perimeter_short() {
-  translate([0,0,pcb_thickness+topmost_z-pcb_perimeter_height]) {
-    linear_extrude(pcb_perimeter_height+base_thickness) {
-      difference() {
-        offset(r=pcb_holder_perimeter+pcb_gap) pcb_edge();
-        offset(r=-pcb_overlap) pcb_edge();
-      }
-    }
-  }
-}
-''')
+pcb_perimeter_short = translate([0,0,sv_pcb_thickness+sv_topmost_z-sv_pcb_perimeter_height]) (
+        linear_extrude(sv_pcb_perimeter_height+sv_base_thickness) (
+            difference() (
+                offset(sv_pcb_holder_perimeter+sv_pcb_gap) (
+                    sm_pcb_edge()
+                ),
+                offset(-sv_pcb_overlap)(
+                    sm_pcb_edge()
+                )
+            )
+        )
+    )
+
+sm_pcb_perimeter_short = module('pcb_perimeter_short', pcb_perimeter_short)
 
 if jig_style_soldering_helper:
     lip_lines = edge_cuts.compute_lips(arc_resolution, pcb_filled_shapes[0], lip_size)
     #print('lip lines no = ',len(lip_lines))
     #pprint(lip_lines)
-    fp_scad.write('''
-module peri_line(start, end, line_width) {
-    hull() {
-        translate(start) circle(d=line_width);
-        translate(end) circle(d=line_width);
-    }
-}
-''')
-    fp_scad.write('module pcb_support_lips() {\n')
-    # FIXME: find a good way to compute the magic factor 1.2
-    # Essentially - should the lips be rounded or flat ?
-    fp_scad.write('  lip_width = max(pcb_gap+pcb_holder_perimeter, pcb_overlap)*1.2;\n')
-    fp_scad.write('  tiny_dimension = 0.001;\n')
-    fp_scad.write('  base_z =  pcb_thickness+topmost_z+base_thickness+2*tiny_dimension;\n')
-    fp_scad.write('  translate([0,0,-tiny_dimension])\n')
-    fp_scad.write('    linear_extrude(base_z)\n')
-    fp_scad.write('      union() {\n')
+    @exportReturnValueAsModule
+    def peri_line(start, end, line_width):
+        return solid2.hull() (
+            circle(d=line_width).translate(start),
+            circle(d=line_width).translate(end)
+        )
+
+    #fp_scad.write('  lip_width = max(pcb_gap+pcb_holder_perimeter, pcb_overlap)*1.2;\n')
+    #fp_scad.write('  tiny_dimension = 0.001;\n')
+    #fp_scad.write('  base_z =  pcb_thickness+topmost_z+base_thickness+2*tiny_dimension;\n')
+    sv_lip_width = ScadValue('lip_width')
+    sv_tiny_dimension = ScadValue('tiny_dimension')
+    sv_base_z = ScadValue('base_z')
+    s_lip_lines = union()
     for line in lip_lines:
         # FIXME: see the -y below? This is ugliness. Aim for consistency
-        fp_scad.write('    peri_line([%f,%f], [%f,%f], lip_width);'%(line[0][0], -line[0][1], line[1][0], -line[1][1]))
-    fp_scad.write('      }\n')
-    fp_scad.write('}\n')
+        s_lip_lines += peri_line(
+                        [line[0][0],-line[0][1]],
+                        [line[1][0],-line[1][1]],
+                        sv_lip_width)
+    sm_pcb_support_lips = module('pcb_support_lips',
+            translate([0,0,-sv_tiny_dimension]) (
+                linear_extrude(sv_base_z) (
+                    s_lip_lines
+                )
+            )
+    )
 
+    fp_scad.write(scad_render(ScadValue('//')))
     fp_scad.write('''
 // This _is_ the entire jig model. Structured such that
 // you can individually check the parts
