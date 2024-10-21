@@ -39,40 +39,9 @@ from jigcommon import *
 import edge_cuts
 import mesh_ops
 from solid2_module import module, exportReturnValueAsModule
+import default_config
 
 shell_protrude = 1 # shells will come above PCB by this much, so user can enable and see
-
-def default_cfg():
-    return '''
-[pcb]
-thickness = 1.6
-tesellate_edge_cuts_curve = 0.1
-
-[pcb_holder]
-gap = 0.3
-overlap = 0.3
-perimeter = 1.6
-base_perimeter_height = 2
-forced_lips = [ ]
-lip_size = 15
-
-[component_holder]
-shell_clearance = 1
-shell_gap = 0.1
-shell_thickness = 1.2
-
-[refs]
-do_not_process = []
-process_only_these = []
-
-[jig_options]
-style = "soldering_helper"
-base_thickness = 1
-base_style = "mesh"
-
-[base_mesh]
-line_width = 1.6
-'''
 
 def get_th_info(board, mounting_holes, ref_process_only_these, ref_do_not_process):
     fp_list = board.Footprints()
@@ -219,36 +188,37 @@ if args.config:
     cfg = tomllib.load(open(args.config,'rb'))
     #print(json.dumps(cfg, indent=2))
 else:
-    config_text = default_cfg()
+    config_text = default_config.get()
     cfg = tomllib.loads(config_text)
 
 pcb_thickness = cfg['pcb']['thickness']
-shell_clearance = cfg['component_holder']['shell_clearance']
-shell_gap = cfg['component_holder']['shell_gap']
-shell_thickness = cfg['component_holder']['shell_thickness']
-base_is_solid = 0 if cfg['jig_options']['base_style']=="mesh" else 1
+shell_clearance = cfg['component_shell']['clearance_from_pcb']
+shell_gap = cfg['component_shell']['gap']
+shell_thickness = cfg['component_shell']['thickness']
+base_is_solid = 0 if cfg['holder']['base']['type']=="mesh" else 1
 
-base_thickness = cfg['jig_options']['base_thickness']
-mesh_line_width = cfg['base_mesh']['line_width']
-pcb_perimeter_height = cfg['pcb_holder']['base_perimeter_height']
-pcb_holder_gap = cfg['pcb_holder']['gap']
-pcb_holder_overlap = cfg['pcb_holder']['overlap']
-pcb_holder_perimeter = cfg['pcb_holder']['perimeter']
-forced_pcb_supports = cfg['pcb_holder']['forced_lips']
+base_thickness = cfg['holder']['base']['thickness']
+arc_resolution = cfg['pcb']['tesellate_edge_cuts_curve']
+
+mesh_line_width = cfg['holder']['base']['mesh']['line_width']
+pcb_perimeter_height = cfg['holder']['base']['perimeter_height']
+pcb_holder_gap = cfg['holder']['pcb_gap']
+pcb_holder_overlap = cfg['holder']['pcb_overlap']
+pcb_holder_perimeter = cfg['holder']['perimeter']
+forced_pcb_supports = cfg['holder']['forced_lips']
+lip_size = cfg['holder']['lip_size']
 ref_do_not_process = cfg['refs']['do_not_process']
 ref_process_only_these = cfg['refs']['process_only_these']
-lip_size = cfg['pcb_holder']['lip_size']
-arc_resolution = cfg['pcb']['tesellate_edge_cuts_curve']
-jig_style = cfg['jig_options']['style']
-jig_style_range = ['soldering_helper', 'component_shell']
+jig_style = cfg['jig']['type']
+jig_style_range = ['th_soldering', 'component_fitting']
 if jig_style not in jig_style_range:
     print('BAD value "%s" for jig_options/style. Valid values are : %s' %
         (jig_style,','.join(jig_style_range)))
     sys.exit(-1)
-jig_style_soldering_helper = (jig_style == 'soldering_helper')
-jig_style_component_shell = (jig_style == 'component_shell')
+jig_style_th_soldering = (jig_style == 'th_soldering')
+jig_type_component_fitting = (jig_style == 'component_fitting')
 
-if jig_style_component_shell:
+if jig_type_component_fitting:
     if shell_clearance>0:
         print('INFO: Generating component shells, note shell_clearance=%s will cut into shell.'
             %(shell_clearance))
@@ -552,7 +522,7 @@ def wide_line(start, end):
             translate(end)(cylinder(sv_base_thickness, sv_mesh_line_width))
             )
 # Delaunay triangulation will be done on the following points
-if jig_style_soldering_helper:
+if jig_style_th_soldering:
     # 1. centers of all considered footprints
     # 2. mounting holes
     # 3. bounding box corners of PCB edge. mounting holes are
@@ -685,7 +655,7 @@ pcb_perimeter_short = translate([0,0,sv_pcb_thickness+sv_topmost_z-sv_pcb_perime
 
 sm_pcb_perimeter_short = module('pcb_perimeter_short', pcb_perimeter_short)
 
-if jig_style_soldering_helper:
+if jig_style_th_soldering:
     lip_lines = edge_cuts.compute_lips(arc_resolution, pcb_filled_shapes[0], lip_size)
     #print('lip lines no = ',len(lip_lines))
     #pprint(lip_lines)
@@ -769,7 +739,7 @@ if(orient_to_print == 1) {
 
 
 # Help understanding
-if jig_style_soldering_helper:
+if jig_style_th_soldering:
     fp_scad.write('''
 // Stackup of the mesh
 module stackup() {
