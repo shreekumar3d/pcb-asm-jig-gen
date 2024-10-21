@@ -1,3 +1,100 @@
+import tomllib
+import sys
+import json
+from copy import deepcopy
+from pprint import pprint
+
+valid_shell_types = ['wiggle', 'fitting', 'tight']
+valid_jig_types = ['TH_soldering', 'component_fitting']
+valid_base_types = ["mesh", "solid"]
+valid_insertions = ["top", "bottom"]
+
+TH_component_shell_value_keys = ["thickness", "gap", "clearance_from_pcb"]
+
+def transfer_default_values(default_cfg, cfg):
+    """ transfer default values from default_cfg to cfg """
+    for key, value in default_cfg.items():
+        if type(value) is not dict:
+            if key not in cfg:
+                cfg[key] = deepcopy(value)
+        else:
+            if key not in cfg:
+                cfg[key] = deepcopy(value)
+            else:
+                # recurse
+                transfer_default_values(default_cfg[key], cfg[key])
+
+def load(configFile, TH_ref_names):
+    """ load configuration file, validate against TH reference names"""
+    default_config_text = get_default()
+    default_cfg = tomllib.loads(default_config_text)
+
+    if configFile:
+        config_text = open(configFile, 'r').read()
+        cfg = tomllib.load(open(configFile,'rb'))
+        #print(json.dumps(cfg, indent=2))
+    else:
+        config_text = default_config_text
+        cfg = copy.deepcopy(default_cfg)
+
+    transfer_default_values(default_cfg, cfg)
+
+    base_type = cfg['holder']['base']['type']
+    if base_type not in valid_base_types:
+        raise ValueError(f"Bad value holder.base.type={shell_type}. Recognized values are:{valid_base_types}")
+
+    jig_type = cfg['jig']['type']
+    if jig_type not in valid_jig_types:
+        raise ValueError(f"Bad value jig.type={jig_type}. Recognized values are:{valid_jig_types}")
+
+    shell_type = cfg['TH_component_shell']['type']
+    if shell_type not in valid_shell_types:
+        raise ValueError(f"Bad value TH_component_shell.type={shell_type}. Recognized values are:{valid_shell_types}")
+
+    insertion = cfg['TH_component_shell']['component_insertion']
+    if insertion not in valid_insertions:
+        raise ValueError(f"Bad value TH_component_shell.component_insertion={insertion}. Recognized values are:{valid_insertions}")
+
+    for key in cfg['TH_component_shell']:
+        if key in default_cfg['TH_component_shell'].keys():
+            continue
+        if key in TH_ref_names:
+            continue
+        raise ValueError(f"Can't use TH_component_shell.{key}. No such TH component on the board.")
+
+    # Expand component level defaults
+    for ref in TH_ref_names:
+        if ref in default_cfg['TH_component_shell'].keys():
+            continue
+        if ref not in cfg['TH_component_shell']:
+            cfg['TH_component_shell'][ref] = deepcopy(default_cfg['TH_component_shell'])
+            continue
+
+        try:
+            ref_cs_type = cfg['TH_component_shell'][ref]['type']
+            if ref_cs_type not in valid_shell_types:
+                raise ValueError(
+                    f"Bad value TH_component_shell.{ref}.type={ref_cs_type}. Recognized values are:{valid_shell_types}")
+        except KeyError:
+            cfg['TH_component_shell'][ref]['type'] = shell_type
+
+        try:
+            ref_cs_insertion = cfg['TH_component_shell'][ref]['component_insertion']
+            if ref_cs_insertion not in valid_insertions:
+                raise ValueError(
+                    f"Bad value TH_component_shell.{ref}.component_insertion={ref_cs_insertion}. Recognized values are:{valid_insertions}")
+        except KeyError:
+            cfg['TH_component_shell'][ref]['component_insertion'] = insertion
+        
+        for other_key in TH_component_shell_value_keys:
+            if other_key not in cfg['TH_component_shell'][ref]:
+                cfg['TH_component_shell'][ref][other_key] = default_cfg['TH_component_shell'][other_key]
+
+        if cfg['TH_component_shell'][ref]['component_insertion'] == 'bottom':
+            cfg['TH_component_shell'][ref]['type'] = "wiggle"
+
+    return cfg, config_text
+    
 #
 # This is the default configuration for the jig generator tool,
 # and are chosen to be useful defaults that can reliably work
@@ -9,7 +106,7 @@
 # Keep this well commented, and current.  This will help tool
 # users understand and tune.
 #
-def get():
+def get_default():
     return '''
 # All dimensions are specified in millimeters
 #
@@ -108,7 +205,7 @@ process_only_these = [
 # Around each through hole component (ref), the jig generator creates a "shell"
 # that serves as a component holder at its exact location on the board.
 
-# shell can have one of a few styles
+# shell can have one of a few types
 # - wiggle =>  A shape that gives a bit of wiggle room for the component,
 #              when inserted into the shell. Depending on the exact shape of
 #              the component, it may be possible to rock/shake the component
@@ -148,7 +245,7 @@ clearance_from_pcb = 1
 #
 # Jigs of various types can be generated:
 #
-# - "th_soldering" creates a jig to help solder
+# - "TH_soldering" creates a jig to help solder
 #   through hole (TH) components. This creates
 #   the PCB holder, the base, and the shells
 #   for all components.
@@ -156,7 +253,7 @@ clearance_from_pcb = 1
 # - "component_fitting" creates only shells,
 #   and the base, without creating the holder.
 #
-type = "th_soldering"
+type = "TH_soldering"
 
 # NOTE:
 #

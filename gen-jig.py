@@ -29,7 +29,6 @@ import functools
 from pprint import pprint
 import numpy as np
 import sys
-import tomllib
 import json
 import subprocess
 import tempfile
@@ -39,22 +38,16 @@ from jigcommon import *
 import edge_cuts
 import mesh_ops
 from solid2_module import module, exportReturnValueAsModule
-import default_config
+import jigconfig
 
 shell_protrude = 1 # shells will come above PCB by this much, so user can enable and see
 
-def get_th_info(board, mounting_holes, ref_process_only_these, ref_do_not_process):
+def get_th_info(board):
+    mounting_holes = []
     fp_list = board.Footprints()
     th_info = []
     for fp in fp_list:
         ref = fp.GetReference()
-        if len(ref_process_only_these)>0:
-            # process_only_these takes precedence
-            if ref not in ref_process_only_these:
-                continue
-        elif len(ref_do_not_process)>0 and ref not in ref_do_not_process:
-            # exclusion is enforced if process_only_these isn't specified
-            continue
         fp_x = units_to_mm(fp.GetX())
         fp_y = -units_to_mm(fp.GetY())
         #print(fp.GetReference())
@@ -96,7 +89,7 @@ def get_th_info(board, mounting_holes, ref_process_only_these, ref_do_not_proces
                     break
         #print(fp.Footprint().GetName())
         #pprint(dir(fp.Footprint()))
-    return th_info
+    return th_info, mounting_holes
 
 # generate module names used in oscad
 def ref2outline(ref):
@@ -121,7 +114,7 @@ sv_shell_gap = ScadValue('shell_gap');
 sv_pcb_thickness = ScadValue('pcb_thickness');
 sv_shell_protrude = ScadValue('shell_protrude');
 
-def gen_shell_shape(ref, x, y, rot, min_z, max_z, verts, mod_lines, geom_lines):
+def gen_shell_shape(ref, x, y, rot, min_z, max_z, verts):
     sv_max_z[ref] = ScadValue('max_z_%s'%(ref))
     # first define the polygon so that we can do offset on it
     mod_name = ref2outline(ref)
@@ -183,22 +176,20 @@ parser.add_argument("kicad_pcb", help='KiCAD PCB file (.kicad_pcb) to process')
 parser.add_argument("output", help='Output file to generate.')
 args = parser.parse_args()
 
-if args.config:
-    config_text = open(args.config, 'r').read()
-    cfg = tomllib.load(open(args.config,'rb'))
-    #print(json.dumps(cfg, indent=2))
-else:
-    config_text = default_config.get()
-    cfg = tomllib.loads(config_text)
+board = pcbnew.LoadBoard(args.kicad_pcb)
+th_info, mounting_holes = get_th_info(board)
 
+try:
+    cfg, config_text = jigconfig.load(args.config, [compinfo['ref'] for compinfo in th_info])
+except ValueError as err:
+    print(f"ERROR: {err}", file=sys.stderr)
+    sys.exit(-1)
+    
 pcb_thickness = cfg['pcb']['thickness']
 shell_clearance = cfg['TH_component_shell']['clearance_from_pcb']
 shell_type = cfg['TH_component_shell']['type']
-if shell_type not in ['wiggle', 'fitting', 'tight']:
-    print('ERROR: invalid value of shell_type %s'%(shell_type))
-    sys.exit(-1)
 if shell_type in ['fitting', 'tight']:
-    print(f"ERROR: shell_type='{shell_type}' is not implemented yet.")
+    print(f"ERROR: shell_type='{shell_type}' is not implemented yet.", file=sys.stderr)
     sys.exit(-1)
 shell_gap = cfg['TH_component_shell']['gap']
 shell_thickness = cfg['TH_component_shell']['thickness']
@@ -218,12 +209,7 @@ lip_size = cfg['holder']['lip_size']
 ref_do_not_process = cfg['TH_refs']['do_not_process']
 ref_process_only_these = cfg['TH_refs']['process_only_these']
 jig_style = cfg['jig']['type']
-jig_style_range = ['th_soldering', 'component_fitting']
-if jig_style not in jig_style_range:
-    print('BAD value "%s" for jig_options/style. Valid values are : %s' %
-        (jig_style,','.join(jig_style_range)))
-    sys.exit(-1)
-jig_style_th_soldering = (jig_style == 'th_soldering')
+jig_style_th_soldering = (jig_style == 'TH_soldering')
 jig_type_component_fitting = (jig_style == 'component_fitting')
 
 if jig_type_component_fitting:
@@ -231,9 +217,20 @@ if jig_type_component_fitting:
         print('INFO: Generating component shells, note shell_clearance=%s will cut into shell.'
             %(shell_clearance))
 
-board = pcbnew.LoadBoard(args.kicad_pcb)
-mounting_holes = forced_pcb_supports
-th_info = get_th_info(board, mounting_holes, ref_process_only_these, ref_do_not_process)
+mounting_holes += forced_pcb_supports
+
+# Filter by name
+th_info_proc = []
+for comp in th_info:
+    ref = comp['ref']
+    if len(ref_process_only_these)>0:
+        # process_only_these takes precedence
+        if ref not in ref_process_only_these:
+            continue
+    elif len(ref_do_not_process)>0 and ref not in ref_do_not_process:
+        # exclusion is enforced if process_only_these isn't specified
+        continue
+    th_info_proc.append(comp)
 
 # Setup environment for file name expansion
 os.environ["KIPRJMOD"] = os.path.split(args.kicad_pcb)[0]
@@ -244,7 +241,7 @@ for ver in [6,7,8]: # Hmm - would we need more ?
         os.environ[env_var_name] = path_sys_3dmodels
 
 # test if you can load all models
-for comp in th_info:
+for comp in th_info_proc:
     # We're guaranteed to have at-least one 3d model
     for modinfo in comp['models']:
         model_filename = os.path.expandvars(modinfo['model'])
@@ -257,7 +254,6 @@ for comp in th_info:
 # fp.GetSide() - 0 for top, 31 for bottom
 # fp.GetOrientation() - 0, 90, ...
 
-mod_lines = []
 geom_lines = []
 
 if args.output_format == 'stl':
@@ -376,7 +372,7 @@ all_shells = []
 fp_centers = []
 topmost_z = 0
 # For each TH component on the board
-for th in th_info:
+for th in th_info_proc:
     print('Processing ', th['ref'])
     # each footprint can have multiple models.
     # each model that is "in contact" with the board will generate
@@ -426,16 +422,22 @@ for th in th_info:
             #print(hull_verts)
             shell_ident = '%s_%d'%(th['ref'],idx)
             gen_shell_shape(shell_ident,
-                          th['x'], th['y'], th['orientation'],
-                          min_z, max_z, hull_verts,
-                          mod_lines, geom_lines)
+                    th['x'], th['y'], th['orientation'],
+                    min_z, max_z, hull_verts)
             all_shells.append({
                 'name':shell_ident,
+                'ref':th['ref'],
                 'min_z':min_z,
                 'max_z':max_z,
-                'model':modinfo['model']})
+                'model':modinfo['model'],
+                'x' : th['x'],
+                'y' : th['y'],
+                'orientation' : th['orientation'],
+                'hull_verts' : hull_verts})
             print('  Generating shell %s for mesh %s'%(shell_ident, modinfo['model']))
             topmost_z = max(topmost_z, max_z)
+
+bottom_insertion_z = topmost_z + 2*base_thickness
 
 fp_scad.write('''
 // Gap (in mm) between board edge and slot on which the board sits
@@ -467,9 +469,18 @@ base_z =  pcb_thickness+topmost_z+base_thickness+2*tiny_dimension;
 mesh_start_z = pcb_thickness+topmost_z+base_thickness-mesh_line_height;
 '''%(pcb_holder_gap, pcb_holder_overlap, pcb_holder_perimeter, pcb_perimeter_height, topmost_z))
 
+# Allow tweaking bottom insertion from customizer. At a per component level
+fp_scad.write('/* [Component Insertion] */\n')
+for shell_info in all_shells:
+    fp_scad.write('%s_insertion="%s"; // [top,bottom]\n'%(
+        shell_info['ref'],
+        cfg['TH_component_shell'][shell_info['ref']]['component_insertion'])
+    )
+fp_scad.write('/* [Hidden] */\n')
+fp_scad.write('bottom_insertion_z = %s;\n'%(bottom_insertion_z))
 fp_scad.write('// Height of the individual components\n')
 for shell_info in all_shells:
-    fp_scad.write('max_z_%s=%s; //3D Model: %s\n'%(shell_info['name'],shell_info['max_z'], shell_info['model']))
+    fp_scad.write('max_z_%s= (%s_insertion=="bottom")? bottom_insertion_z : %s; //3D Model: %s\n'%(shell_info['name'],shell_info['ref'], shell_info['max_z'], shell_info['model']))
 fp_scad.write('// } END : Computed Values\n')
 fp_scad.write('\n')
 
@@ -487,7 +498,6 @@ sm_pcb_edge = module('pcb_edge', polygon(pcb_edge_points))
 #plt.plot(x1,y1)
 #plt.show()
 
-fp_scad.write(''.join(mod_lines))
 fp_scad.write(''.join(geom_lines))
 # This module will include all shells
 combined_shell = union()
